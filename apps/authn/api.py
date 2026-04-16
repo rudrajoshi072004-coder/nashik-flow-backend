@@ -1,0 +1,78 @@
+from rest_framework import status
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenRefreshView
+
+from .serializers import OTPRequestSerializer, OTPVerifySerializer
+from .services import request_otp, verify_otp_and_issue_tokens
+
+
+class OTPRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = OTPRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = serializer.validated_data["phone"]
+        otp = request_otp(phone)
+        return Response(
+            {
+                "message": "OTP generated",
+                "phone": phone,
+                "otp_dev_only": otp,
+                "expires_in_seconds": 300,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class OTPVerifyView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = OTPVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            payload = verify_otp_and_issue_tokens(
+                serializer.validated_data["phone"],
+                serializer.validated_data["otp"],
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = payload["user"]
+        return Response(
+            {
+                "access": payload["access"],
+                "refresh": payload["refresh"],
+                "user": {
+                    "id": str(user.id),
+                    "phone": user.phone,
+                    "role": user.role,
+                    "city": user.city,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class JWTRefreshView(TokenRefreshView):
+    permission_classes = [AllowAny]
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response(
+            {
+                "id": str(user.id),
+                "phone": user.phone,
+                "role": user.role,
+                "city": user.city,
+                "name": f"{user.first_name} {user.last_name}".strip(),
+            },
+            status=status.HTTP_200_OK,
+        )

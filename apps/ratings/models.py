@@ -12,5 +12,7 @@ class Rating(TimeStampedUUIDModel):
 
     class Meta:
         constraints = [
-            models.CheckConstraint(check=models.Q(score__gte=1) & models.Q(score__lte=5), name="rating_between_1_5")
+            models.CheckConstraint(
+                condition=models.Q(score__gte=1) & models.Q(score__lte=5), name="rating_between_1_5"
+            )
         ]

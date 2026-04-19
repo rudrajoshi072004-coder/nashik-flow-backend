@@ -58,8 +58,8 @@ class Booking(TimeStampedUUIDModel, SoftDeleteModel):
             models.Index(fields=["customer", "created_at"]),
         ]
         constraints = [
-            models.CheckConstraint(check=Q(estimated_fare__gte=0), name="booking_estimated_fare_gte_zero"),
-            models.CheckConstraint(check=Q(final_fare__gte=0), name="booking_final_fare_gte_zero"),
+            models.CheckConstraint(condition=Q(estimated_fare__gte=0), name="booking_estimated_fare_gte_zero"),
+            models.CheckConstraint(condition=Q(final_fare__gte=0), name="booking_final_fare_gte_zero"),
         ]
 
 

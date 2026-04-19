@@ -1,8 +1,9 @@
 from django.urls import path
-from .api import JWTRefreshView, MeView, OTPRequestView, OTPVerifyView
+from .api import JWTRefreshView, MeView, OTPRequestView, OTPVerifyView, PasswordLoginView
 
 
 urlpatterns = [
+    path("login/password", PasswordLoginView.as_view(), name="auth-password-login"),
     path("otp/request", OTPRequestView.as_view(), name="otp-request"),
     path("otp/verify", OTPVerifyView.as_view(), name="otp-verify"),
     path("jwt/refresh", JWTRefreshView.as_view(), name="jwt-refresh"),

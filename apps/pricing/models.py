@@ -22,6 +22,6 @@ class PricingRule(TimeStampedUUIDModel, SoftDeleteModel):
     class Meta:
         indexes = [models.Index(fields=["city", "active", "starts_at"])]
         constraints = [
-            models.CheckConstraint(check=Q(surge_multiplier__gte=1), name="pricing_surge_gte_one"),
-            models.CheckConstraint(check=Q(base_fare__gte=0), name="pricing_base_fare_gte_zero"),
+            models.CheckConstraint(condition=Q(surge_multiplier__gte=1), name="pricing_surge_gte_one"),
+            models.CheckConstraint(condition=Q(base_fare__gte=0), name="pricing_base_fare_gte_zero"),
         ]

@@ -22,4 +22,4 @@ class Payout(TimeStampedUUIDModel):
 
     class Meta:
         indexes = [models.Index(fields=["status", "created_at"])]
-        constraints = [models.CheckConstraint(check=Q(amount__gt=0), name="payout_amount_gt_zero")]
+        constraints = [models.CheckConstraint(condition=Q(amount__gt=0), name="payout_amount_gt_zero")]

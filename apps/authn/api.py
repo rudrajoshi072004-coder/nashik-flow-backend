@@ -1,18 +1,37 @@
+from django.contrib.auth import authenticate
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .serializers import OTPRequestSerializer, OTPVerifySerializer
+from .serializers import OTPRequestSerializer, OTPVerifySerializer, PasswordLoginSerializer
 from .services import request_otp, verify_otp_and_issue_tokens
+
+
+def _coerce_otp_payload(data) -> dict:
+    """Ensure JSON sends strings (some clients send phone as a number)."""
+    if data is None:
+        return {}
+    try:
+        out = data.dict() if hasattr(data, "dict") else dict(data)
+    except (TypeError, ValueError):
+        return {}
+    p = out.get("phone")
+    if p is not None and not isinstance(p, str):
+        out["phone"] = str(p).strip()
+    o = out.get("otp")
+    if o is not None and not isinstance(o, str):
+        out["otp"] = str(o).strip()
+    return out
 
 
 class OTPRequestView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = OTPRequestSerializer(data=request.data)
+        serializer = OTPRequestSerializer(data=_coerce_otp_payload(request.data))
         serializer.is_valid(raise_exception=True)
         phone = serializer.validated_data["phone"]
         otp = request_otp(phone)
@@ -31,7 +50,7 @@ class OTPVerifyView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = OTPVerifySerializer(data=request.data)
+        serializer = OTPVerifySerializer(data=_coerce_otp_payload(request.data))
         serializer.is_valid(raise_exception=True)
         try:
             payload = verify_otp_and_issue_tokens(
@@ -59,6 +78,36 @@ class OTPVerifyView(APIView):
 
 class JWTRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
+
+
+class PasswordLoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = serializer.validated_data["phone"]
+        password = serializer.validated_data["password"]
+        user = authenticate(request, username=phone, password=password)
+        if user is None:
+            return Response({"detail": "Invalid phone or password."}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.is_active:
+            return Response({"detail": "Account disabled."}, status=status.HTTP_403_FORBIDDEN)
+
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "user": {
+                    "id": str(user.id),
+                    "phone": user.phone,
+                    "role": user.role,
+                    "city": user.city,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class MeView(APIView):

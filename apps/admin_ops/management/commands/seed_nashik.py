@@ -11,6 +11,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self._seed_admins()
+        self._seed_demo_customer()
         self._seed_vehicle_categories()
         self._seed_service_zones()
         self.stdout.write(self.style.SUCCESS("Nashik seed completed."))
@@ -26,6 +27,21 @@ class Command(BaseCommand):
                 "city": "Nashik",
             },
         )
+
+    def _seed_demo_customer(self):
+        """Dev/demo customer for password login on mobile (see customer app login screen)."""
+        user_model = get_user_model()
+        u, _ = user_model.objects.update_or_create(
+            phone="+919175504996",
+            defaults={
+                "role": user_model.Role.CUSTOMER,
+                "is_active": True,
+                "is_phone_verified": True,
+                "city": "Nashik",
+            },
+        )
+        u.set_password("Tran@123")
+        u.save(update_fields=["password"])
 
     def _seed_vehicle_categories(self):
         rows = [

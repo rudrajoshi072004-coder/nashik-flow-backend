@@ -8,7 +8,11 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-dev-key")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",")
+# Empty DJANGO_ALLOWED_HOSTS in .env becomes "" — getenv returns "" and ".split" yields [""], which rejects every host.
+_allowed = (os.getenv("DJANGO_ALLOWED_HOSTS") or "*").strip()
+ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()]
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",

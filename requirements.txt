@@ -12,3 +12,5 @@ celery>=5.4
 django-celery-beat>=2.7
 django-celery-results>=2.5
 python-dotenv>=1.0
+gunicorn>=22.0
+uvicorn>=0.30

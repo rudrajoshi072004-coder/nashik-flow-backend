@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -98,16 +99,36 @@ TEMPLATES = [
     }
 ]
 
-DATABASES = {
-    "default": {
+def _database_from_env() -> dict:
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
+            "USER": os.getenv("POSTGRES_USER", "postgres"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
+            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
+            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        }
+
+    parsed = urlparse(database_url)
+    # Render-style URL: postgres://user:pass@host:5432/dbname
+    db_config = {
         "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
-        "USER": os.getenv("POSTGRES_USER", "postgres"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
-        "HOST": os.getenv("POSTGRES_HOST", "localhost"),
-        "PORT": os.getenv("POSTGRES_PORT", "5432"),
+        "NAME": (parsed.path or "/").lstrip("/") or os.getenv("POSTGRES_DB", "nashik_logistics"),
+        "USER": parsed.username or os.getenv("POSTGRES_USER", "postgres"),
+        "PASSWORD": parsed.password or os.getenv("POSTGRES_PASSWORD", "postgres"),
+        "HOST": parsed.hostname or os.getenv("POSTGRES_HOST", "localhost"),
+        "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
     }
-}
+    query = parse_qs(parsed.query)
+    sslmode = query.get("sslmode", [None])[0]
+    if sslmode:
+        db_config["OPTIONS"] = {"sslmode": sslmode}
+    return db_config
+
+
+DATABASES = {"default": _database_from_env()}
 
 AUTH_USER_MODEL = "users.User"
 

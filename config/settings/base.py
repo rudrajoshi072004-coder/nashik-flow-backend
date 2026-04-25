@@ -117,9 +117,6 @@ def _normalize_db_host(value: str) -> str:
         parsed = urlparse(host)
         if parsed.hostname:
             return parsed.hostname
-    # Render internal hostnames sometimes get copied without ".internal".
-    if host.startswith("dpg-") and "." not in host:
-        return f"{host}.internal"
     return host
 
 

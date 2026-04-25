@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -99,33 +99,56 @@ TEMPLATES = [
     }
 ]
 
-def _database_from_env() -> dict:
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if not database_url:
-        return {
-            "ENGINE": "django.contrib.gis.db.backends.postgis",
-            "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
-            "USER": os.getenv("POSTGRES_USER", "postgres"),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
-            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
-            "PORT": os.getenv("POSTGRES_PORT", "5432"),
-        }
+def _database_url_from_env() -> str:
+    # Accept common Render/hosting variable names.
+    for key in ("DATABASE_URL", "POSTGRES_URL", "INTERNAL_DATABASE_URL", "EXTERNAL_DATABASE_URL"):
+        value = (os.getenv(key) or "").strip()
+        if value:
+            return value
+    return ""
 
-    parsed = urlparse(database_url)
-    # Render-style URL: postgres://user:pass@host:5432/dbname
-    db_config = {
+
+def _normalize_db_host(value: str) -> str:
+    host = (value or "").strip()
+    if not host:
+        return "localhost"
+    # Some deployments accidentally paste a full URL into POSTGRES_HOST.
+    if "://" in host:
+        parsed = urlparse(host)
+        if parsed.hostname:
+            return parsed.hostname
+    # Render internal hostnames sometimes get copied without ".internal".
+    if host.startswith("dpg-") and "." not in host:
+        return f"{host}.internal"
+    return host
+
+
+def _database_from_env() -> dict:
+    database_url = _database_url_from_env()
+    if database_url:
+        parsed = urlparse(database_url)
+        query = parse_qs(parsed.query)
+        db_config = {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": (parsed.path or "/").lstrip("/") or os.getenv("POSTGRES_DB", "nashik_logistics"),
+            "USER": unquote(parsed.username or "") or os.getenv("POSTGRES_USER", "postgres"),
+            "PASSWORD": unquote(parsed.password or "") or os.getenv("POSTGRES_PASSWORD", "postgres"),
+            "HOST": _normalize_db_host(parsed.hostname or os.getenv("POSTGRES_HOST", "localhost")),
+            "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
+        }
+        sslmode = query.get("sslmode", [None])[0] or (os.getenv("POSTGRES_SSLMODE") or "").strip()
+        if sslmode:
+            db_config["OPTIONS"] = {"sslmode": sslmode}
+        return db_config
+
+    return {
         "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": (parsed.path or "/").lstrip("/") or os.getenv("POSTGRES_DB", "nashik_logistics"),
-        "USER": parsed.username or os.getenv("POSTGRES_USER", "postgres"),
-        "PASSWORD": parsed.password or os.getenv("POSTGRES_PASSWORD", "postgres"),
-        "HOST": parsed.hostname or os.getenv("POSTGRES_HOST", "localhost"),
-        "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
+        "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
+        "USER": os.getenv("POSTGRES_USER", "postgres"),
+        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
+        "HOST": _normalize_db_host(os.getenv("POSTGRES_HOST", "localhost")),
+        "PORT": os.getenv("POSTGRES_PORT", "5432"),
     }
-    query = parse_qs(parsed.query)
-    sslmode = query.get("sslmode", [None])[0]
-    if sslmode:
-        db_config["OPTIONS"] = {"sslmode": sslmode}
-    return db_config
 
 
 DATABASES = {"default": _database_from_env()}

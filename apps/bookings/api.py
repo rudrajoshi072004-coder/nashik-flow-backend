@@ -76,7 +76,13 @@ class BookingViewSet(viewsets.ModelViewSet):
         except Exception:
             logger.exception("Async dispatch enqueue failed, falling back to sync dispatch", extra={"booking_id": str(booking.id)})
             # Keep booking creation resilient even if broker/worker is temporarily unavailable.
-            dispatch_booking(str(booking.id))
+            try:
+                dispatch_booking(str(booking.id))
+            except Exception:
+                logger.exception(
+                    "Sync dispatch also failed after enqueue failure; booking created without immediate dispatch",
+                    extra={"booking_id": str(booking.id)},
+                )
 
     @action(detail=False, methods=["post"], url_path="fare-estimate")
     def fare_estimate(self, request):

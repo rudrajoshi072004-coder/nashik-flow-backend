@@ -56,6 +56,11 @@ class BookingSerializer(serializers.ModelSerializer):
         model = Booking
         fields = "__all__"
         read_only_fields = ("customer", "estimated_distance_km", "estimated_duration_min", "estimated_fare")
+        extra_kwargs = {
+            # Mobile sends pickup/drop as lat/lng; these are derived in create()
+            "pickup_location": {"required": False},
+            "drop_location": {"required": False},
+        }
 
     def validate(self, attrs):
         booking_type = attrs.get("booking_type", getattr(self.instance, "booking_type", None))

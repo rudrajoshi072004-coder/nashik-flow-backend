@@ -1,9 +1,12 @@
 from decimal import Decimal
+import logging
 
+from django.db.models import Q
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from apps.common.api.responses import success_response
+from apps.dispatch.services import RIDE_REQUEST_SENT
 from apps.common.permissions.rbac import IsAdminRole, IsCustomerOrAdmin, IsDriverOrAdmin
 from apps.trip_events.models import TripEvent
 from apps.vehicle_categories.models import VehicleCategory
@@ -12,6 +15,8 @@ from apps.dispatch.tasks import dispatch_booking
 from .models import Booking
 from .serializers import BookingSerializer, FareEstimateSerializer
 from .services import transition_booking_state
+
+logger = logging.getLogger(__name__)
 
 
 class BookingTransitionSerializer(serializers.Serializer):
@@ -47,12 +52,31 @@ class BookingViewSet(viewsets.ModelViewSet):
         if user.role == "customer":
             return qs.filter(customer=user, is_deleted=False)
         if user.role in {"driver", "fleet_driver"}:
-            return qs.filter(driver__user=user, is_deleted=False)
+            if not hasattr(user, "driver_profile"):
+                return qs.filter(is_deleted=False, driver__user=user)
+            profile = user.driver_profile
+            return (
+                qs.filter(is_deleted=False)
+                .filter(
+                    Q(driver__user=user)
+                    | Q(
+                        state=Booking.BookingState.SEARCHING_DRIVER,
+                        trip_events__event_type=RIDE_REQUEST_SENT,
+                        trip_events__actor_driver=profile,
+                    )
+                )
+                .distinct()
+            )
         return qs.filter(is_deleted=False)
 
     def perform_create(self, serializer):
         booking = serializer.save(customer=self.request.user, state=Booking.BookingState.PENDING_QUOTE)
-        dispatch_booking.delay(str(booking.id))
+        try:
+            dispatch_booking.delay(str(booking.id))
+        except Exception:
+            logger.exception("Async dispatch enqueue failed, falling back to sync dispatch", extra={"booking_id": str(booking.id)})
+            # Keep booking creation resilient even if broker/worker is temporarily unavailable.
+            dispatch_booking(str(booking.id))
 
     @action(detail=False, methods=["post"], url_path="fare-estimate")
     def fare_estimate(self, request):

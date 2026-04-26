@@ -6,7 +6,6 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from apps.common.api.responses import success_response
-from apps.dispatch.services import RIDE_REQUEST_SENT
 from apps.common.permissions.rbac import IsAdminRole, IsCustomerOrAdmin, IsDriverOrAdmin
 from apps.trip_events.models import TripEvent
 from apps.vehicle_categories.models import VehicleCategory
@@ -17,6 +16,7 @@ from .serializers import BookingSerializer, FareEstimateSerializer
 from .services import transition_booking_state
 
 logger = logging.getLogger(__name__)
+RIDE_REQUEST_SENT = "ride_request_sent"
 
 
 class BookingTransitionSerializer(serializers.Serializer):

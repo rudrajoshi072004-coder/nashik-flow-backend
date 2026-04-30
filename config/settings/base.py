@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parents[3]
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-dev-key")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-dev-key-change-this-to-32-plus-bytes")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 # Empty DJANGO_ALLOWED_HOSTS in .env becomes "" — getenv returns "" and ".split" yields [""], which rejects every host.
 _allowed = (os.getenv("DJANGO_ALLOWED_HOSTS") or "*").strip()
@@ -195,27 +195,48 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": REDIS_URL,
-    }
-}
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [REDIS_URL]},
-    }
-}
+REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
+USE_REDIS = bool(REDIS_URL)
 
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+if USE_REDIS:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [REDIS_URL]},
+        }
+    }
+    CELERY_BROKER_URL = REDIS_URL
+    CELERY_RESULT_BACKEND = REDIS_URL
+else:
+    # Deployment-safe fallback: app still runs without external Redis.
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "nashik-logistics-local-cache",
+        }
+    }
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
+    CELERY_BROKER_URL = "memory://"
+    CELERY_RESULT_BACKEND = "cache+memory://"
+
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+if not USE_REDIS:
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOGGING = {

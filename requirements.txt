@@ -14,3 +14,5 @@ django-celery-results>=2.5
 python-dotenv>=1.0
 gunicorn>=22.0
 uvicorn>=0.30
+websockets>=12.0
+wsproto>=1.2

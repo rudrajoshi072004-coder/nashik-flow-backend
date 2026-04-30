@@ -4,7 +4,7 @@ import logging
 from django.db.models import Q
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.common.api.responses import success_response
 from apps.common.permissions.rbac import IsAdminRole, IsCustomerOrAdmin, IsDriverOrAdmin
 from apps.trip_events.models import TripEvent
@@ -38,8 +38,12 @@ class BookingViewSet(viewsets.ModelViewSet):
     ordering_fields = ("created_at", "scheduled_at", "estimated_fare")
 
     def get_permissions(self):
-        if self.action in {"create", "list", "retrieve", "fare_estimate"}:
+        if self.action in {"fare_estimate"}:
+            return [AllowAny()]
+        if self.action in {"create"}:
             return [IsCustomerOrAdmin()]
+        if self.action in {"list", "retrieve", "timeline"}:
+            return [IsAuthenticated()]
         if self.action in {"state_transition"}:
             return [IsAuthenticated()]
         if self.action in {"admin_update_state"}:
@@ -49,9 +53,14 @@ class BookingViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        if user.role == "customer":
+        if not getattr(user, "is_authenticated", False):
+            return qs.none()
+        role = getattr(user, "role", None)
+        if role is None:
+            return qs.none()
+        if role == "customer":
             return qs.filter(customer=user, is_deleted=False)
-        if user.role in {"driver", "fleet_driver"}:
+        if role in {"driver", "fleet_driver"}:
             if not hasattr(user, "driver_profile"):
                 return qs.filter(is_deleted=False, driver__user=user)
             profile = user.driver_profile

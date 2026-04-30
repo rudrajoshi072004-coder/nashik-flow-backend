@@ -1,75 +1,156 @@
-from django.contrib.gis.db.models.functions import Distance
-from django.contrib.gis.measure import D
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
 from django.db import transaction
 
 from apps.bookings.models import Booking
-from apps.drivers.models import DriverProfile
-from apps.tracking.models import DriverLiveLocation
+from apps.trip_events.models import TripEvent
 from apps.trip_events.services import broadcast_event, record_trip_event
 
+from .matching import find_drivers_in_ring, RingDef
 
-DISPATCH_RADIUS_KM = 8
+# TripEvent.event_type (no new DB fields)
+RIDE_REQUEST_SENT = "ride_request_sent"
+RIDE_OFFER_ROUND = "ride_offer_round"
+
+OFFER_WAIT_SECONDS = 25
+
+# “is_available” is represented as: online + not on another active trip (see matching._not_on_active_trip)
 
 
-def find_nearest_available_drivers(*, booking: Booking, radius_km: float = DISPATCH_RADIUS_KM, exclude_driver_ids=None):
-    exclude_driver_ids = exclude_driver_ids or []
-    return (
-        DriverLiveLocation.objects.select_related("driver", "driver__user")
-        .filter(
-            driver__is_online=True,
-            driver__kyc_status=DriverProfile.KYCStatus.APPROVED,
-            driver__is_deleted=False,
-            driver__vehicles__category=booking.vehicle_category,
-            driver__vehicles__status="active",
+def get_notified_driver_ids(*, booking: Booking) -> list[str]:
+    return [
+        str(x)
+        for x in (
+            TripEvent.objects.filter(booking=booking, event_type=RIDE_REQUEST_SENT, actor_driver__isnull=False)
+            .values_list("actor_driver_id", flat=True)
+            .distinct()
         )
-        .exclude(driver_id__in=exclude_driver_ids)
-        .annotate(distance_m=Distance("location", booking.pickup_location))
-        .filter(location__distance_lte=(booking.pickup_location, D(km=radius_km)))
-        .order_by("distance_m")
-        .distinct()
+    ]
+
+
+def driver_had_ride_request(*, booking: Booking, driver_profile) -> bool:
+    return TripEvent.objects.filter(
+        booking=booking, event_type=RIDE_REQUEST_SENT, actor_driver=driver_profile
+    ).exists()
+
+
+def is_latest_offer_round(*, booking: Booking, round_id: str) -> bool:
+    ev = (
+        TripEvent.objects.filter(booking=booking, event_type=RIDE_OFFER_ROUND)
+        .order_by("-sequence", "-created_at")
+        .first()
     )
+    if not ev or not ev.payload:
+        return False
+    return str(ev.payload.get("round_id")) == str(round_id)
+
+
+def _broadcast_driver_provisional_assign(*, booking: Booking, driver_profile, distance_m: float) -> None:
+    """Driver app treats `driver_assigned` like the legacy flow (sets current booking)."""
+    assignment_payload = {
+        "booking_id": str(booking.id),
+        "driver_id": str(driver_profile.id),
+        "driver_phone": driver_profile.user.phone,
+        "distance_m": distance_m,
+        "offer": True,
+    }
+    broadcast_event(f"driver_{driver_profile.id}", "driver_assigned", assignment_payload)
+    # Customer must NOT be notified until a driver has actually won the offer
+    record_trip_event(
+        booking=booking,
+        event_type=RIDE_REQUEST_SENT,
+        actor_driver=driver_profile,
+        payload=assignment_payload,
+    )
+
+
+def _record_offer_round(
+    *, booking: Booking, ring: RingDef, round_id: str, driver_ids: list[str]
+) -> None:
+    record_trip_event(
+        booking=booking,
+        event_type=RIDE_OFFER_ROUND,
+        payload={
+            "round_id": round_id,
+            "ring_index": ring.index,
+            "inner_km": ring.inner_km,
+            "outer_km": ring.outer_km,
+            "driver_ids": driver_ids,
+        },
+    )
+
+
+def run_dispatch_for_ring(
+    *, booking: Booking, ring: RingDef, previously_notified: list[str] | None = None
+) -> tuple[str | None, int]:
+    """
+    Find drivers in `ring` excluding all previously notified drivers.
+    Returns (round_id or None if no new offers, count_offered).
+    """
+    previously_notified = list(previously_notified or [])
+    rows = find_drivers_in_ring(booking=booking, ring=ring, exclude_driver_ids=previously_notified)
+    if not rows:
+        return None, 0
+    round_id = str(uuid.uuid4())
+    driver_ids: list[str] = []
+    for loc, dist in rows:
+        d = loc.driver
+        driver_ids.append(str(d.id))
+        _broadcast_driver_provisional_assign(
+            booking=booking,
+            driver_profile=d,
+            distance_m=float(dist.m) if hasattr(dist, "m") else float(dist),
+        )
+    _record_offer_round(booking=booking, ring=ring, round_id=round_id, driver_ids=driver_ids)
+    from .tasks import wait_after_offer_round  # local import avoids circular
+
+    cumulative = [str(x) for x in previously_notified] + [str(x) for x in driver_ids]
+    wait_after_offer_round.apply_async(
+        args=[str(booking.id), round_id, ring.index, cumulative], countdown=OFFER_WAIT_SECONDS
+    )
+    return round_id, len(driver_ids)
 
 
 @transaction.atomic
-def assign_driver_to_booking(*, booking: Booking, timeout_seconds: int = 30):
-    previous_driver_ids = list(
-        booking.trip_events.filter(event_type="driver_assigned").values_list("actor_driver_id", flat=True)
-    )
-    candidates = find_nearest_available_drivers(booking=booking, exclude_driver_ids=previous_driver_ids)
-    candidate = candidates.first()
-    if not candidate:
-        record_trip_event(
-            booking=booking,
-            event_type="driver_found",
-            payload={"status": "none_available"},
-        )
-        broadcast_event(
-            f"booking_{booking.id}",
-            "driver_found",
-            {"booking_id": str(booking.id), "status": "none_available"},
-        )
-        return None
-
-    driver_profile = candidate.driver
-    booking.driver = driver_profile
-    booking.state = Booking.BookingState.DRIVER_ASSIGNED
-    booking.save(update_fields=["driver", "state", "updated_at"])
-
+def mark_no_driver_available(*, booking: Booking) -> None:
+    booking.refresh_from_db()
+    if booking.state != Booking.BookingState.SEARCHING_DRIVER or booking.driver_id:
+        return
+    booking.state = Booking.BookingState.FAILED
+    booking.save(update_fields=["state", "updated_at"])
     record_trip_event(
         booking=booking,
-        event_type="driver_found",
-        actor_driver=driver_profile,
-        payload={"driver_id": str(driver_profile.id), "distance_m": float(candidate.distance_m.m)},
-    )
-    record_trip_event(
-        booking=booking,
-        event_type="driver_assigned",
-        actor_driver=driver_profile,
+        event_type="no_driver_found",
         from_state=Booking.BookingState.SEARCHING_DRIVER,
-        to_state=Booking.BookingState.DRIVER_ASSIGNED,
-        payload={"timeout_seconds": timeout_seconds},
+        to_state=Booking.BookingState.FAILED,
+        payload={"reason": "no_driver_found"},
+    )
+    broadcast_event(
+        f"booking_{booking.id}",
+        "driver_found",
+        {"booking_id": str(booking.id), "status": "no_driver_found"},
+    )
+    broadcast_event(
+        f"user_{booking.customer_id}",
+        "driver_found",
+        {"booking_id": str(booking.id), "status": "no_driver_found"},
     )
 
+
+def start_expanding_driver_dispatch(*, booking: Booking) -> None:
+    """Entry point: begin ring 0 (or next ring) — used by tasks."""
+    from .tasks import continue_dispatch_rings  # local import
+
+    continue_dispatch_rings.delay(str(booking.id), 0, [str(x) for x in get_notified_driver_ids(booking=booking)])
+
+
+def _broadcast_customer_driver_assigned(*, booking: Booking) -> None:
+    driver_profile = booking.driver
+    if not driver_profile:
+        return
     assignment_payload = {
         "booking_id": str(booking.id),
         "driver_id": str(driver_profile.id),
@@ -78,13 +159,43 @@ def assign_driver_to_booking(*, booking: Booking, timeout_seconds: int = 30):
     broadcast_event(f"booking_{booking.id}", "driver_assigned", assignment_payload)
     broadcast_event(f"user_{booking.customer_id}", "driver_assigned", assignment_payload)
     broadcast_event(f"driver_{driver_profile.id}", "driver_assigned", assignment_payload)
-    broadcast_event(
-        f"admin_city_{booking.customer.city.lower()}",
-        "driver_assigned",
-        assignment_payload,
-    )
+    if booking.customer and booking.customer.city:
+        broadcast_event(
+            f"admin_city_{booking.customer.city.lower()}",
+            "driver_assigned",
+            assignment_payload,
+        )
 
-    from .tasks import handle_assignment_timeout
 
-    handle_assignment_timeout.apply_async(args=[str(booking.id), str(driver_profile.id)], countdown=timeout_seconds)
-    return driver_profile
+@transaction.atomic
+def cancel_pending_offers_for_others(
+    *, booking: Booking, winning_driver_id: str, candidate_driver_ids: list[str] | None = None
+) -> None:
+    cands = [d for d in (candidate_driver_ids or get_notified_driver_ids(booking=booking)) if str(d) != str(winning_driver_id)]
+    for did in cands:
+        broadcast_event(
+            f"driver_{did}",
+            "ride_request_cancelled",
+            {"booking_id": str(booking.id)},
+        )
+
+
+def on_driver_won_ride(*, booking: Booking, winning_driver_id: str) -> None:
+    """
+    After booking has driver and state DRIVER_ACCEPTED; notify customer and cancel losers.
+    """
+    cancel_pending_offers_for_others(booking=booking, winning_driver_id=winning_driver_id)
+    _broadcast_customer_driver_assigned(booking=booking)
+
+
+# --- Legacy function name (dispatch API) ---------------------------------
+def assign_driver_to_booking(*, booking: Booking, timeout_seconds: int = 30) -> Any:
+    """
+    Replaced by batch ring dispatch. Kept for API compatibility.
+    `timeout_seconds` is kept for signature compatibility; offer wait is OFFER_WAIT_SECONDS.
+    """
+    booking.refresh_from_db()
+    if booking.state != Booking.BookingState.SEARCHING_DRIVER or booking.driver_id:
+        return booking.driver
+    start_expanding_driver_dispatch(booking=booking)
+    return None

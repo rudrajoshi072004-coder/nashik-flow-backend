@@ -15,7 +15,12 @@ class TransitionResult:
 VALID_TRANSITIONS = {
     Booking.BookingState.DRAFT: {Booking.BookingState.PENDING_QUOTE, Booking.BookingState.CANCELLED_BY_CUSTOMER},
     Booking.BookingState.PENDING_QUOTE: {Booking.BookingState.SEARCHING_DRIVER, Booking.BookingState.CANCELLED_BY_CUSTOMER},
-    Booking.BookingState.SEARCHING_DRIVER: {Booking.BookingState.DRIVER_ASSIGNED, Booking.BookingState.CANCELLED_BY_CUSTOMER, Booking.BookingState.FAILED},
+    Booking.BookingState.SEARCHING_DRIVER: {
+        Booking.BookingState.DRIVER_ASSIGNED,
+        Booking.BookingState.DRIVER_ACCEPTED,
+        Booking.BookingState.CANCELLED_BY_CUSTOMER,
+        Booking.BookingState.FAILED,
+    },
     Booking.BookingState.DRIVER_ASSIGNED: {Booking.BookingState.DRIVER_ACCEPTED, Booking.BookingState.SEARCHING_DRIVER},
     Booking.BookingState.DRIVER_ACCEPTED: {Booking.BookingState.DRIVER_ARRIVING, Booking.BookingState.CANCELLED_BY_DRIVER},
     Booking.BookingState.DRIVER_ARRIVING: {Booking.BookingState.DRIVER_ARRIVED, Booking.BookingState.CANCELLED_BY_DRIVER},
@@ -28,6 +33,76 @@ VALID_TRANSITIONS = {
 }
 
 
+def _driver_is_busy_on_another_trip(*, profile, current_booking: Booking) -> bool:
+    busy = {
+        Booking.BookingState.DRIVER_ASSIGNED,
+        Booking.BookingState.DRIVER_ACCEPTED,
+        Booking.BookingState.DRIVER_ARRIVING,
+        Booking.BookingState.DRIVER_ARRIVED,
+        Booking.BookingState.PICKUP_OTP_PENDING,
+        Booking.BookingState.TRIP_STARTED,
+        Booking.BookingState.IN_TRANSIT,
+        Booking.BookingState.NEARING_DROP,
+        Booking.BookingState.PAYMENT_PENDING,
+    }
+    return (
+        Booking.objects.filter(driver=profile, is_deleted=False, state__in=busy)
+        .exclude(id=current_booking.id)
+        .exists()
+    )
+
+
+def _accept_ride_while_searching(
+    *, booking: Booking, actor, payload: dict
+) -> TransitionResult:
+    from apps.dispatch.services import driver_had_ride_request, on_driver_won_ride
+
+    profile = actor.driver_profile
+    with transaction.atomic():
+        locked = Booking.objects.select_for_update().get(id=booking.id)
+        if locked.state != Booking.BookingState.SEARCHING_DRIVER:
+            raise ValueError("Booking is not accepting offers.")
+        if locked.driver_id:
+            raise ValueError("A driver is already connected to this booking.")
+        if not driver_had_ride_request(booking=locked, driver_profile=profile):
+            raise ValueError("This driver is not in the current offer pool.")
+        if _driver_is_busy_on_another_trip(profile=profile, current_booking=locked):
+            raise ValueError("You already have an active trip.")
+
+        from_state = locked.state
+        current_seq = (
+            TripEvent.objects.filter(booking=locked).order_by("-sequence").values_list("sequence", flat=True).first()
+            or 0
+        )
+        next_seq = current_seq + 1
+        locked.driver = profile
+        locked.state = Booking.BookingState.DRIVER_ACCEPTED
+        locked.save(update_fields=["driver", "state", "updated_at"])
+        event = TripEvent.objects.create(
+            booking=locked,
+            actor_user=actor,
+            actor_driver=profile,
+            event_type="booking_state_changed",
+            from_state=from_state,
+            to_state=locked.state,
+            sequence=next_seq,
+            payload=payload,
+        )
+
+    on_driver_won_ride(booking=locked, winning_driver_id=str(profile.id))
+    event_payload = {"booking_id": str(locked.id), "state": locked.state, "sequence": event.sequence}
+    broadcast_event(f"booking_{locked.id}", "booking_status_update", event_payload)
+    broadcast_event(f"user_{locked.customer_id}", "booking_status_update", event_payload)
+    broadcast_event(f"driver_{locked.driver_id}", "booking_status_update", event_payload)
+    lifecycle_event = _map_state_event(locked.state)
+    if lifecycle_event:
+        broadcast_event(f"booking_{locked.id}", lifecycle_event, event_payload)
+        broadcast_event(f"user_{locked.customer_id}", lifecycle_event, event_payload)
+        if locked.driver_id:
+            broadcast_event(f"driver_{locked.driver_id}", lifecycle_event, event_payload)
+    return TransitionResult(str(locked.id), locked.state, event.sequence)
+
+
 def transition_booking_state(
     *,
     booking: Booking,
@@ -38,6 +113,19 @@ def transition_booking_state(
 ) -> TransitionResult:
     payload = payload or {}
     from_state = booking.state
+    if (
+        from_state == Booking.BookingState.SEARCHING_DRIVER
+        and to_state == Booking.BookingState.DRIVER_ACCEPTED
+        and actor
+        and getattr(actor, "role", None) in {"driver", "fleet_driver"}
+    ):
+        return _accept_ride_while_searching(booking=booking, actor=actor, payload=payload)
+    if (
+        from_state == Booking.BookingState.SEARCHING_DRIVER
+        and to_state == Booking.BookingState.DRIVER_ASSIGNED
+        and not booking.driver_id
+    ):
+        raise ValueError("Cannot move to driver_assigned without a driver on the booking.")
     allowed = VALID_TRANSITIONS.get(from_state, set())
     if to_state not in allowed:
         raise ValueError(f"Invalid transition: {from_state} -> {to_state}")

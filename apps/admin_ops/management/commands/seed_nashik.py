@@ -78,10 +78,17 @@ class Command(BaseCommand):
             )
 
     def _seed_demo_driver_dispatch(self):
-        """Demo driver usable for dispatch: approved KYC, one seeded vehicle per category, Nashik-ish live location."""
+        """Demo drivers for local/LAN QA: approved KYC, vehicles for every category, Nashik-ish live coords."""
+        for phone, lat, lng in (
+            ("9175504999", 19.9975, 73.7898),
+            ("9175504998", 19.9982, 73.7905),  # Slight offset (~100 m) vs first driver.
+        ):
+            self._ensure_dispatch_ready_driver(phone=phone, lat=lat, lng=lng)
+
+    def _ensure_dispatch_ready_driver(self, *, phone: str, lat: float, lng: float):
         user_model = get_user_model()
         u, _ = user_model.objects.update_or_create(
-            phone="9175504999",
+            phone=phone,
             defaults={
                 "role": user_model.Role.DRIVER,
                 "is_active": True,
@@ -93,7 +100,6 @@ class Command(BaseCommand):
         u.save(update_fields=["password"])
 
         profile, _created = DriverProfile.objects.get_or_create(user=u)
-        # Eligible for matching: approved KYC + online (dispatch filters on both).
         profile.kyc_status = DriverProfile.KYCStatus.APPROVED
         profile.is_online = True
         profile.save(update_fields=["kyc_status", "is_online", "updated_at"])
@@ -112,7 +118,6 @@ class Command(BaseCommand):
                 },
             )
 
-        lat, lng = 19.9975, 73.7898  # Inside Nashik Core seed polygon; WebSocket dispatch uses this row.
         DriverLiveLocation.objects.update_or_create(
             driver=profile,
             defaults={

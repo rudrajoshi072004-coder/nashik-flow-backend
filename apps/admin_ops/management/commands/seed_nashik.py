@@ -1,9 +1,13 @@
-from django.core.management.base import BaseCommand
-from django.contrib.gis.geos import Polygon
 from django.contrib.auth import get_user_model
+from django.contrib.gis.geos import Point, Polygon
+from django.core.management.base import BaseCommand
+from django.utils import timezone
 
+from apps.drivers.models import DriverProfile
 from apps.service_zones.models import ServiceZone
+from apps.tracking.models import DriverLiveLocation
 from apps.vehicle_categories.models import VehicleCategory
+from apps.vehicles.models import Vehicle
 
 
 class Command(BaseCommand):
@@ -13,6 +17,7 @@ class Command(BaseCommand):
         self._seed_admins()
         self._seed_demo_customer()
         self._seed_vehicle_categories()
+        self._seed_demo_driver_dispatch()
         self._seed_service_zones()
         self.stdout.write(self.style.SUCCESS("Nashik seed completed."))
 
@@ -71,6 +76,54 @@ class Command(BaseCommand):
                     "priority_order": order,
                 },
             )
+
+    def _seed_demo_driver_dispatch(self):
+        """Demo driver usable for dispatch: approved KYC, one seeded vehicle per category, Nashik-ish live location."""
+        user_model = get_user_model()
+        u, _ = user_model.objects.update_or_create(
+            phone="9175504999",
+            defaults={
+                "role": user_model.Role.DRIVER,
+                "is_active": True,
+                "is_phone_verified": True,
+                "city": "Nashik",
+            },
+        )
+        u.set_password("Tran@123")
+        u.save(update_fields=["password"])
+
+        profile, _created = DriverProfile.objects.get_or_create(user=u)
+        # Eligible for matching: approved KYC + online (dispatch filters on both).
+        profile.kyc_status = DriverProfile.KYCStatus.APPROVED
+        profile.is_online = True
+        profile.save(update_fields=["kyc_status", "is_online", "updated_at"])
+
+        uid_part = profile.id.hex[:12]
+        for cat in VehicleCategory.objects.filter(active=True, is_deleted=False).order_by("priority_order"):
+            reg_num = (f"S{uid_part}{cat.id.hex}"[:32]).upper()
+            Vehicle.objects.get_or_create(
+                registration_number=reg_num,
+                defaults={
+                    "driver": profile,
+                    "category": cat,
+                    "status": Vehicle.Status.ACTIVE,
+                    "brand": "Seed",
+                    "model_name": cat.name,
+                },
+            )
+
+        lat, lng = 19.9975, 73.7898  # Inside Nashik Core seed polygon; WebSocket dispatch uses this row.
+        DriverLiveLocation.objects.update_or_create(
+            driver=profile,
+            defaults={
+                "location": Point(float(lng), float(lat), srid=4326),
+                "booking": None,
+                "heading": 0,
+                "speed_kmph": 0,
+                "accuracy_m": 30,
+                "source_timestamp": timezone.now(),
+            },
+        )
 
     def _seed_service_zones(self):
         # Approximate Nashik core bounding polygon for development seeds.

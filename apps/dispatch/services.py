@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -16,6 +17,8 @@ RIDE_REQUEST_SENT = "ride_request_sent"
 RIDE_OFFER_ROUND = "ride_offer_round"
 
 OFFER_WAIT_SECONDS = 25
+
+logger = logging.getLogger(__name__)
 
 # “is_available” is represented as: online + not on another active trip (see matching._not_on_active_trip)
 
@@ -92,7 +95,22 @@ def run_dispatch_for_ring(
     """
     previously_notified = list(previously_notified or [])
     rows = find_drivers_in_ring(booking=booking, ring=ring, exclude_driver_ids=previously_notified)
+    pt = booking.pickup_location
+    pickup_lat = float(pt.y) if pt is not None else None
+    pickup_lng = float(pt.x) if pt is not None else None
     if not rows:
+        logger.info(
+            "dispatch: ring empty — no matched drivers online with live location within band",
+            extra={
+                "booking_id": str(booking.id),
+                "ring_index": ring.index,
+                "inner_km": ring.inner_km,
+                "outer_km": ring.outer_km,
+                "vehicle_category_id": str(booking.vehicle_category_id),
+                "pickup_lat": pickup_lat,
+                "pickup_lng": pickup_lng,
+            },
+        )
         return None, 0
     round_id = str(uuid.uuid4())
     driver_ids: list[str] = []
@@ -105,6 +123,18 @@ def run_dispatch_for_ring(
             distance_m=float(dist.m) if hasattr(dist, "m") else float(dist),
         )
     _record_offer_round(booking=booking, ring=ring, round_id=round_id, driver_ids=driver_ids)
+    logger.info(
+        "dispatch: provisional offers pushed to drivers via WebSocket (driver_<id>)",
+        extra={
+            "booking_id": str(booking.id),
+            "round_id": round_id,
+            "ring_index": ring.index,
+            "offered_driver_ids": driver_ids,
+            "pickup_lat": pickup_lat,
+            "pickup_lng": pickup_lng,
+            "vehicle_category_id": str(booking.vehicle_category_id),
+        },
+    )
     from .tasks import wait_after_offer_round  # local import avoids circular
 
     cumulative = [str(x) for x in previously_notified] + [str(x) for x in driver_ids]

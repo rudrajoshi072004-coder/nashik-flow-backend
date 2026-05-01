@@ -20,20 +20,28 @@ class RealtimeConsumer(AsyncJsonWebsocketConsumer):
 
         self.user = user
         self.joined_booking_groups = set()
+        self.driver_group_name: str | None = None
+        self.admin_city_group_name: str | None = None
         await self.accept()
         await self.channel_layer.group_add(f"user_{self.user.id}", self.channel_name)
 
         if self.user.role in {"driver", "fleet_driver"}:
             profile, _ = await self._get_or_create_driver_profile()
-            await self.channel_layer.group_add(f"driver_{profile.id}", self.channel_name)
+            self.driver_group_name = f"driver_{profile.id}"
+            await self.channel_layer.group_add(self.driver_group_name, self.channel_name)
         if self.user.role in {"super_admin", "city_manager", "support_agent", "finance_admin"}:
-            await self.channel_layer.group_add(f"admin_city_{self.user.city.lower()}", self.channel_name)
+            self.admin_city_group_name = f"admin_city_{self.user.city.lower()}"
+            await self.channel_layer.group_add(self.admin_city_group_name, self.channel_name)
 
         await self.send_json({"event": "connected", "payload": {"user_id": str(self.user.id), "role": self.user.role}})
 
     async def disconnect(self, close_code):
         if hasattr(self, "user") and getattr(self.user, "is_authenticated", False):
             await self.channel_layer.group_discard(f"user_{self.user.id}", self.channel_name)
+            if getattr(self, "driver_group_name", None):
+                await self.channel_layer.group_discard(self.driver_group_name, self.channel_name)
+            if getattr(self, "admin_city_group_name", None):
+                await self.channel_layer.group_discard(self.admin_city_group_name, self.channel_name)
             for group in self.joined_booking_groups:
                 await self.channel_layer.group_discard(group, self.channel_name)
 

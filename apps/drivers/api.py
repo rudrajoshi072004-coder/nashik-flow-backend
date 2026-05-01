@@ -9,6 +9,7 @@ from apps.bookings.serializers import BookingSerializer
 from apps.common.api.responses import success_response
 from apps.common.permissions.rbac import IsDriverRole
 from apps.trip_events.models import TripEvent
+from apps.users.models import User
 from .models import DriverProfile
 from .serializers import DriverAvailabilitySerializer, DriverProfileSerializer
 
@@ -17,7 +18,18 @@ class DriverViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsDriverRole]
 
     def get_object(self):
-        return getattr(self.request.user, "driver_profile", None)
+        """Resolve or lazily create the driver's profile.
+
+        Routes like ``/drivers/me/bookings/`` are registered correctly; callers often
+        mistake an application-level HTTP 404 (no profile row) for a missing endpoint.
+        Auth/onboarding flows may create users with driver role before a profile exists.
+        """
+        user = self.request.user
+        role = getattr(user, "role", None)
+        profile = DriverProfile.objects.filter(user=user).first()
+        if profile is None and role in (User.Role.DRIVER, User.Role.FLEET_DRIVER):
+            profile, _ = DriverProfile.objects.get_or_create(user=user)
+        return profile
 
     def _missing_profile_response(self):
         return success_response(

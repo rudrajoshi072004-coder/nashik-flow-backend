@@ -19,7 +19,8 @@ class VehicleCategoryViewSet(viewsets.ModelViewSet):
     ordering_fields = ("priority_order", "base_fare", "per_km_rate")
 
     def get_authenticators(self):
-        if self.action in {"list", "retrieve"}:
+        action = getattr(self, "action", None)
+        if action in {"list", "retrieve"}:
             return []
         return super().get_authenticators()
 

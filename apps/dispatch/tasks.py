@@ -1,3 +1,5 @@
+import logging
+
 from celery import shared_task
 
 from apps.bookings.models import Booking
@@ -10,14 +12,27 @@ from .services import (
     run_dispatch_for_ring,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @shared_task
 def dispatch_booking(booking_id: str):
-    booking = Booking.objects.filter(id=booking_id).first()
+    booking = (
+        Booking.objects.select_related("vehicle_category", "customer")
+        .filter(id=booking_id)
+        .first()
+    )
     if not booking:
         return
     if booking.state not in {Booking.BookingState.PENDING_QUOTE, Booking.BookingState.SEARCHING_DRIVER}:
         return
+    if not booking.pickup_location or not booking.drop_location:
+        logger.error(
+            "dispatch_booking: booking missing geometry; cannot match drivers",
+            extra={"booking_id": str(booking_id)},
+        )
+        return
+
     booking.state = Booking.BookingState.SEARCHING_DRIVER
     booking.save(update_fields=["state", "updated_at"])
     record_trip_event(booking=booking, event_type="booking_created", to_state=booking.state)
@@ -34,7 +49,7 @@ def continue_dispatch_rings(booking_id: str, ring_index: int, cumulative_notifie
     Recursively process dispatch rings. `cumulative_notified` = driver ids already offered this search.
     """
     cumulative_notified = list(cumulative_notified or [])
-    booking = Booking.objects.filter(id=booking_id).first()
+    booking = Booking.objects.select_related("vehicle_category", "customer").filter(id=booking_id).first()
     if not booking:
         return
     if booking.state != Booking.BookingState.SEARCHING_DRIVER or booking.driver_id:
@@ -64,7 +79,7 @@ def wait_after_offer_round(booking_id: str, round_id: str, completed_ring_index:
     `completed_ring_index` is the ring that just completed its offer window.
     """
     cumulative_notified = list(cumulative_notified or [])
-    booking = Booking.objects.filter(id=booking_id).first()
+    booking = Booking.objects.select_related("vehicle_category", "customer").filter(id=booking_id).first()
     if not booking:
         return
     if booking.state != Booking.BookingState.SEARCHING_DRIVER or booking.driver_id:

@@ -67,6 +67,21 @@ class BookingSerializer(serializers.ModelSerializer):
         scheduled_at = attrs.get("scheduled_at", getattr(self.instance, "scheduled_at", None))
         if booking_type == Booking.BookingType.SCHEDULED and not scheduled_at:
             raise serializers.ValidationError({"scheduled_at": "Scheduled booking requires scheduled_at."})
+        # Create must receive explicit pickup/drop coordinates — dispatch matches drivers from `pickup_location`.
+        if self.instance is None:
+            coord_fields = ("pickup_lat", "pickup_lng", "drop_lat", "drop_lng")
+            missing = [k for k in coord_fields if k not in attrs or attrs[k] is None]
+            if missing:
+                raise serializers.ValidationError({k: "This field is required." for k in missing})
+            plat, plng, dlat, dlng = (attrs["pickup_lat"], attrs["pickup_lng"], attrs["drop_lat"], attrs["drop_lng"])
+            for prefix, lat, lng in (("pickup", plat, plng), ("drop", dlat, dlng)):
+                coord_err = {}
+                if not -90.0 <= lat <= 90.0:
+                    coord_err[f"{prefix}_lat"] = "Must be between -90 and 90."
+                if not -180.0 <= lng <= 180.0:
+                    coord_err[f"{prefix}_lng"] = "Must be between -180 and 180."
+                if coord_err:
+                    raise serializers.ValidationError(coord_err)
         return attrs
 
     def create(self, validated_data):

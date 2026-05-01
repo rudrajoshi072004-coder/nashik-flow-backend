@@ -38,13 +38,16 @@ class BookingViewSet(viewsets.ModelViewSet):
     ordering_fields = ("created_at", "scheduled_at", "estimated_fare")
 
     def get_permissions(self):
-        if self.action in {"create"}:
+        action = getattr(self, "action", None)
+        if action in {"fare_estimate"}:
+            return [AllowAny()]
+        if action in {"create"}:
             return [IsCustomerOrAdmin()]
-        if self.action in {"list", "retrieve", "timeline"}:
+        if action in {"list", "retrieve", "timeline"}:
             return [IsAuthenticated()]
-        if self.action in {"state_transition"}:
+        if action in {"state_transition"}:
             return [IsAuthenticated()]
-        if self.action in {"admin_update_state"}:
+        if action in {"admin_update_state"}:
             return [IsAdminRole()]
         return [IsCustomerOrAdmin()]
 

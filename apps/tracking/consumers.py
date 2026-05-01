@@ -4,10 +4,14 @@ from asgiref.sync import sync_to_async
 
 from apps.tracking.services import update_driver_location
 from apps.bookings.models import Booking
+from apps.drivers.models import DriverProfile
 from apps.trip_events.services import record_trip_event, broadcast_event
 
 
 class RealtimeConsumer(AsyncJsonWebsocketConsumer):
+    async def _get_or_create_driver_profile(self):
+        return await sync_to_async(DriverProfile.objects.get_or_create)(user=self.user)
+
     async def connect(self):
         user = self.scope.get("user")
         if not user or isinstance(user, AnonymousUser) or not getattr(user, "is_authenticated", False):
@@ -19,8 +23,9 @@ class RealtimeConsumer(AsyncJsonWebsocketConsumer):
         await self.accept()
         await self.channel_layer.group_add(f"user_{self.user.id}", self.channel_name)
 
-        if self.user.role in {"driver", "fleet_driver"} and hasattr(self.user, "driver_profile"):
-            await self.channel_layer.group_add(f"driver_{self.user.driver_profile.id}", self.channel_name)
+        if self.user.role in {"driver", "fleet_driver"}:
+            profile, _ = await self._get_or_create_driver_profile()
+            await self.channel_layer.group_add(f"driver_{profile.id}", self.channel_name)
         if self.user.role in {"super_admin", "city_manager", "support_agent", "finance_admin"}:
             await self.channel_layer.group_add(f"admin_city_{self.user.city.lower()}", self.channel_name)
 
@@ -46,8 +51,12 @@ class RealtimeConsumer(AsyncJsonWebsocketConsumer):
             return
 
         if event == "driver_location_update" and self.user.role in {"driver", "fleet_driver"}:
+            profile = await sync_to_async(lambda: DriverProfile.objects.filter(user=self.user).first())()
+            if not profile:
+                await self.send_json({"event": "driver_location_ack", "payload": {"ok": False}})
+                return
             await sync_to_async(update_driver_location)(
-                driver_profile=self.user.driver_profile,
+                driver_profile=profile,
                 lat=float(payload["lat"]),
                 lng=float(payload["lng"]),
                 heading=float(payload.get("heading", 0)),

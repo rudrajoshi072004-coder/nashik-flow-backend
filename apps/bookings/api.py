@@ -38,8 +38,6 @@ class BookingViewSet(viewsets.ModelViewSet):
     ordering_fields = ("created_at", "scheduled_at", "estimated_fare")
 
     def get_permissions(self):
-        if self.action in {"fare_estimate"}:
-            return [AllowAny()]
         if self.action in {"create"}:
             return [IsCustomerOrAdmin()]
         if self.action in {"list", "retrieve", "timeline"}:
@@ -93,7 +91,14 @@ class BookingViewSet(viewsets.ModelViewSet):
                     extra={"booking_id": str(booking.id)},
                 )
 
-    @action(detail=False, methods=["post"], url_path="fare-estimate")
+    # No JWT parsing: callers may still attach an expired Bearer; AllowAny alone does not skip auth.
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="fare-estimate",
+        permission_classes=[AllowAny],
+        authentication_classes=[],
+    )
     def fare_estimate(self, request):
         serializer = FareEstimateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

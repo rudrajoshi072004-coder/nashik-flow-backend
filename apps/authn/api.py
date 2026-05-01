@@ -29,6 +29,7 @@ def _coerce_otp_payload(data) -> dict:
 
 class OTPRequestView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = OTPRequestSerializer(data=_coerce_otp_payload(request.data))
@@ -48,6 +49,7 @@ class OTPRequestView(APIView):
 
 class OTPVerifyView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = OTPVerifySerializer(data=_coerce_otp_payload(request.data))
@@ -78,10 +80,12 @@ class OTPVerifyView(APIView):
 
 class JWTRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
 
 class PasswordLoginView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = PasswordLoginSerializer(data=request.data)

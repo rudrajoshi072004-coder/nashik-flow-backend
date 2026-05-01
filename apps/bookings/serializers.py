@@ -80,6 +80,7 @@ class BookingSerializer(serializers.ModelSerializer):
         validated_data["drop_location"] = Point(float(drop_lng), float(drop_lat), srid=4326)
 
         distance_km = _haversine_km(pickup_lat, pickup_lng, drop_lat, drop_lng)
+
         category = validated_data["vehicle_category"]
         estimated_fare = max(category.minimum_fare, category.base_fare + (category.per_km_rate * distance_km))
 
@@ -104,6 +105,12 @@ class BookingSerializer(serializers.ModelSerializer):
                 **stop,
             )
         return booking
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        customer = getattr(instance, "customer", None)
+        data["customer_phone"] = getattr(customer, "phone", None) if customer is not None else None
+        return data
 
 
 class FareEstimateSerializer(serializers.Serializer):

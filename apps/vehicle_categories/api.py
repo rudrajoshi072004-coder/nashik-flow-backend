@@ -18,6 +18,11 @@ class VehicleCategoryViewSet(viewsets.ModelViewSet):
     search_fields = ("name", "payload_type")
     ordering_fields = ("priority_order", "base_fare", "per_km_rate")
 
+    def get_authenticators(self):
+        if self.action in {"list", "retrieve"}:
+            return []
+        return super().get_authenticators()
+
     def get_permissions(self):
         if self.action in {"list", "retrieve"}:
             return [AllowAny()]

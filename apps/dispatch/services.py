@@ -60,14 +60,15 @@ def _broadcast_driver_provisional_assign(*, booking: Booking, driver_profile, di
         "distance_m": distance_m,
         "offer": True,
     }
-    broadcast_event(f"driver_{driver_profile.id}", "driver_assigned", assignment_payload)
-    # Customer must NOT be notified until a driver has actually won the offer
+    # Record before WebSocket so `GET /bookings/<id>/` and `/drivers/me/bookings/`
+    # (queryset uses TripEvent) are consistent when the client fetches immediately.
     record_trip_event(
         booking=booking,
         event_type=RIDE_REQUEST_SENT,
         actor_driver=driver_profile,
         payload=assignment_payload,
     )
+    broadcast_event(f"driver_{driver_profile.id}", "driver_assigned", assignment_payload)
 
 
 def _record_offer_round(

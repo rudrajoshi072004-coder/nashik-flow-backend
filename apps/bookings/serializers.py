@@ -91,6 +91,11 @@ class BookingSerializer(serializers.ModelSerializer):
         drop_lat = validated_data.pop("drop_lat")
         drop_lng = validated_data.pop("drop_lng")
 
+        if not (validated_data.get("pickup_address_text") or "").strip():
+            validated_data["pickup_address_text"] = f"Pickup: {pickup_lat:.5f}, {pickup_lng:.5f}"
+        if not (validated_data.get("drop_address_text") or "").strip():
+            validated_data["drop_address_text"] = f"Drop: {drop_lat:.5f}, {drop_lng:.5f}"
+
         validated_data["pickup_location"] = Point(float(pickup_lng), float(pickup_lat), srid=4326)
         validated_data["drop_location"] = Point(float(drop_lng), float(drop_lat), srid=4326)
 

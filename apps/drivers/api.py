@@ -2,13 +2,12 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from django.db.models import Q
 
 from apps.bookings.models import Booking
+from apps.bookings.querysets import bookings_queryset_for_driver_user
 from apps.bookings.serializers import BookingSerializer
 from apps.common.api.responses import success_response
 from apps.common.permissions.rbac import IsDriverRole
-from apps.trip_events.models import TripEvent
 from apps.users.models import User
 from .models import DriverProfile
 from .serializers import DriverAvailabilitySerializer, DriverProfileSerializer
@@ -70,15 +69,7 @@ class DriverViewSet(viewsets.ViewSet):
         profile = self.get_object()
         if not profile:
             return self._missing_profile_response()
-        offered_booking_ids = TripEvent.objects.filter(
-            actor_driver=profile,
-            event_type="ride_request_sent",
-            booking__state=Booking.BookingState.SEARCHING_DRIVER,
-            booking__driver__isnull=True,
-        ).values_list("booking_id", flat=True)
-        queryset = Booking.objects.filter(is_deleted=False).filter(
-            Q(driver=profile) | Q(id__in=offered_booking_ids)
-        ).distinct().order_by("-created_at")
+        queryset = bookings_queryset_for_driver_user(request.user)
         return success_response(BookingSerializer(queryset, many=True).data)
 
     @action(detail=False, methods=["get"], url_path="nearby-demand")

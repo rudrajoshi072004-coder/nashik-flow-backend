@@ -1,7 +1,6 @@
 from decimal import Decimal
 import logging
 
-from django.db.models import Q
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -12,11 +11,11 @@ from apps.vehicle_categories.models import VehicleCategory
 from apps.dispatch.tasks import dispatch_booking
 
 from .models import Booking
+from .querysets import bookings_queryset_for_driver_user
 from .serializers import BookingSerializer, FareEstimateSerializer
 from .services import transition_booking_state
 
 logger = logging.getLogger(__name__)
-RIDE_REQUEST_SENT = "ride_request_sent"
 
 
 class BookingTransitionSerializer(serializers.Serializer):
@@ -62,21 +61,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         if role == "customer":
             return qs.filter(customer=user, is_deleted=False)
         if role in {"driver", "fleet_driver"}:
-            if not hasattr(user, "driver_profile"):
-                return qs.filter(is_deleted=False, driver__user=user)
-            profile = user.driver_profile
-            return (
-                qs.filter(is_deleted=False)
-                .filter(
-                    Q(driver__user=user)
-                    | Q(
-                        state=Booking.BookingState.SEARCHING_DRIVER,
-                        trip_events__event_type=RIDE_REQUEST_SENT,
-                        trip_events__actor_driver=profile,
-                    )
-                )
-                .distinct()
-            )
+            return bookings_queryset_for_driver_user(user)
         return qs.filter(is_deleted=False)
 
     def perform_create(self, serializer):

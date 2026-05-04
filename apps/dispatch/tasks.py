@@ -67,9 +67,9 @@ def continue_dispatch_rings(booking_id: str, ring_index: int, cumulative_notifie
     if offered:
         return
 
-    # No drivers in this ring — advance immediately
+    # No drivers in this ring — advance immediately (in-process chain; avoids lost tasks without a worker).
     next_index = ring_index + 1
-    continue_dispatch_rings.delay(str(booking.id), next_index, cumulative_notified)
+    continue_dispatch_rings.run(str(booking.id), next_index, cumulative_notified)
 
 
 @shared_task

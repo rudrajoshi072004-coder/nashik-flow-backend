@@ -66,18 +66,17 @@ class BookingViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         booking = serializer.save(customer=self.request.user, state=Booking.BookingState.PENDING_QUOTE)
+        bid = str(booking.id)
+        # Run dispatch in-process so drivers get WebSocket offers even when REDIS_URL is set but no Celery
+        # worker dequeues `.delay(...)` tasks (common single-dyno Render setups).
         try:
-            dispatch_booking.delay(str(booking.id))
+            dispatch_booking.run(bid)
         except Exception:
-            logger.exception("Async dispatch enqueue failed, falling back to sync dispatch", extra={"booking_id": str(booking.id)})
-            # Keep booking creation resilient even if broker/worker is temporarily unavailable.
+            logger.exception("In-process dispatch failed; enqueueing Celery fallback", extra={"booking_id": bid})
             try:
-                dispatch_booking(str(booking.id))
+                dispatch_booking.delay(bid)
             except Exception:
-                logger.exception(
-                    "Sync dispatch also failed after enqueue failure; booking created without immediate dispatch",
-                    extra={"booking_id": str(booking.id)},
-                )
+                logger.exception("Celery enqueue also failed; booking created without dispatch", extra={"booking_id": bid})
 
     # No JWT parsing: callers may still attach an expired Bearer; AllowAny alone does not skip auth.
     @action(

@@ -187,7 +187,10 @@ def start_expanding_driver_dispatch(*, booking: Booking) -> None:
     """Entry point: begin ring 0 (or next ring) — used by tasks."""
     from .tasks import continue_dispatch_rings  # local import
 
-    continue_dispatch_rings.delay(str(booking.id), 0, [str(x) for x in get_notified_driver_ids(booking=booking)])
+    notified = [str(x) for x in get_notified_driver_ids(booking=booking)]
+    # Same rationale as BookingViewSet.perform_create: ring matching must execute without relying on a
+    # background worker for the kicked-off recursion that sends provisional offers over Channels.
+    continue_dispatch_rings.run(str(booking.id), 0, notified)
 
 
 def _broadcast_customer_driver_assigned(*, booking: Booking) -> None:

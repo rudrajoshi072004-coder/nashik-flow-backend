@@ -67,13 +67,14 @@ def _not_on_active_trip() -> Q:
     return ~Q(driver_id__in=busy_driver_ids)
 
 
-def _base_live_qs() -> QuerySet[DriverLiveLocation]:
+def _base_live_qs(*, strict_kyc: bool = True) -> QuerySet[DriverLiveLocation]:
+    kyc_filter = {"driver__kyc_status": DriverProfile.KYCStatus.APPROVED} if strict_kyc else {}
     return (
         DriverLiveLocation.objects.select_related("driver", "driver__user")
         .filter(
             driver__is_online=True,
-            driver__kyc_status=DriverProfile.KYCStatus.APPROVED,
             driver__is_deleted=False,
+            **kyc_filter,
         )
         .filter(_not_on_active_trip())
     )
@@ -94,21 +95,33 @@ def find_drivers_in_ring(
     pt = booking.pickup_location
     assert pt is not None
 
-    qs = (
-        _base_live_qs()
-        .filter(
-            driver__vehicles__category=booking.vehicle_category,
-            driver__vehicles__status=Vehicle.Status.ACTIVE,
+    def build_qs(*, strict_kyc: bool, strict_category: bool) -> QuerySet[DriverLiveLocation]:
+        q = _base_live_qs(strict_kyc=strict_kyc).exclude(driver_id__in=exclude_driver_ids).annotate(
+            distance_m=Distance("location", pt)
         )
-        .exclude(driver_id__in=exclude_driver_ids)
-        .annotate(distance_m=Distance("location", pt))
-    )
-    if inner <= 0:
-        qs = qs.filter(location__distance_lte=(pt, D(km=outer)))
-    else:
-        qs = qs.filter(
-            location__distance_gt=(pt, D(km=inner)),
-            location__distance_lte=(pt, D(km=outer)),
-        )
-    rows = list(qs.order_by("distance_m").distinct()[:MAX_OFFER_BATCH])
+        if strict_category:
+            q = q.filter(
+                driver__vehicles__category=booking.vehicle_category,
+                driver__vehicles__status=Vehicle.Status.ACTIVE,
+            )
+        else:
+            q = q.filter(driver__vehicles__status=Vehicle.Status.ACTIVE)
+        if inner <= 0:
+            q = q.filter(location__distance_lte=(pt, D(km=outer)))
+        else:
+            q = q.filter(
+                location__distance_gt=(pt, D(km=inner)),
+                location__distance_lte=(pt, D(km=outer)),
+            )
+        return q.order_by("distance_m").distinct()
+
+    # Prefer strict matching first; relax only when strict query is empty.
+    qs = build_qs(strict_kyc=True, strict_category=True)
+    rows = list(qs[:MAX_OFFER_BATCH])
+    if not rows:
+        qs = build_qs(strict_kyc=True, strict_category=False)
+        rows = list(qs[:MAX_OFFER_BATCH])
+    if not rows:
+        qs = build_qs(strict_kyc=False, strict_category=False)
+        rows = list(qs[:MAX_OFFER_BATCH])
     return [(row, row.distance_m) for row in rows]

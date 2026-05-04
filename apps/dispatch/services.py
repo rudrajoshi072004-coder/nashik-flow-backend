@@ -53,12 +53,24 @@ def is_latest_offer_round(*, booking: Booking, round_id: str) -> bool:
 
 def _broadcast_driver_provisional_assign(*, booking: Booking, driver_profile, distance_m: float) -> None:
     """Driver app treats `driver_assigned` like the legacy flow (sets current booking)."""
+    pickup = booking.pickup_location
+    drop = booking.drop_location
     assignment_payload = {
         "booking_id": str(booking.id),
         "driver_id": str(driver_profile.id),
         "driver_phone": driver_profile.user.phone,
         "distance_m": distance_m,
         "offer": True,
+        # Include route snapshot so driver UI can render without waiting on REST fetch races.
+        "pickup_address_text": booking.pickup_address_text or "",
+        "drop_address_text": booking.drop_address_text or "",
+        "pickup_lat": float(pickup.y) if pickup is not None else None,
+        "pickup_lng": float(pickup.x) if pickup is not None else None,
+        "drop_lat": float(drop.y) if drop is not None else None,
+        "drop_lng": float(drop.x) if drop is not None else None,
+        "estimated_fare": str(booking.estimated_fare) if booking.estimated_fare is not None else None,
+        "customer_phone": getattr(booking.customer, "phone", None),
+        "notes": booking.notes or "",
     }
     # Record before WebSocket so `GET /bookings/<id>/` and `/drivers/me/bookings/`
     # (queryset uses TripEvent) are consistent when the client fetches immediately.

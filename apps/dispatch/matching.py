@@ -12,10 +12,12 @@ Maximum search radius: 20 km.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D
+from django.utils import timezone
 from django.db.models import Q, QuerySet
 
 from apps.bookings.models import Booking
@@ -48,6 +50,10 @@ _DRIVER_OCCUPIED_STATES: frozenset[str] = frozenset(
     }
 )
 
+# If an active-trip booking is stale for too long, avoid blocking new dispatch forever.
+# This protects drivers from being stuck "busy" due abandoned test/failed lifecycle updates.
+OCCUPIED_BOOKING_STALE_AFTER = timedelta(hours=2)
+
 
 @dataclass(frozen=True)
 class RingDef:
@@ -63,7 +69,14 @@ def iter_rings() -> list[RingDef]:
 def _not_on_active_trip() -> Q:
     from apps.bookings.models import Booking as B
 
-    busy_driver_ids = B.objects.filter(is_deleted=False, state__in=_DRIVER_OCCUPIED_STATES).values("driver_id")
+    recent_cutoff = timezone.now() - OCCUPIED_BOOKING_STALE_AFTER
+    busy_driver_ids = (
+        B.objects.filter(
+            is_deleted=False,
+            state__in=_DRIVER_OCCUPIED_STATES,
+            updated_at__gte=recent_cutoff,
+        ).values("driver_id")
+    )
     return ~Q(driver_id__in=busy_driver_ids)
 
 

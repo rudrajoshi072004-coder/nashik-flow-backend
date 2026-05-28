@@ -101,23 +101,70 @@ TEMPLATES = [
     }
 ]
 
+def _host_resolvable(hostname: str) -> bool:
+    host = (hostname or "").strip()
+    if not host or _is_local_db_host(host):
+        return True
+    import socket
+
+    try:
+        socket.getaddrinfo(host, None)
+        return True
+    except OSError:
+        return False
+
+
 def _database_url_from_env() -> str:
+    import sys
+
     # Railway, Render, Heroku, and similar PaaS variable names.
-    for key in (
-        "DATABASE_PRIVATE_URL",  # Railway internal URL (preferred in same project)
+    ordered_keys = (
+        "DATABASE_PRIVATE_URL",  # Railway internal (same project only)
         "DATABASE_URL",
+        "DATABASE_PUBLIC_URL",  # Railway TCP proxy URL
         "POSTGRES_URL",
         "INTERNAL_DATABASE_URL",
         "EXTERNAL_DATABASE_URL",
         "RAILWAY_DATABASE_URL",
-    ):
+    )
+    candidates: list[tuple[str, str]] = []
+    for key in ordered_keys:
         value = (os.getenv(key) or "").strip()
         if value:
-            return value
+            candidates.append((key, value))
+
+    for key, url in candidates:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if _host_resolvable(host):
+            if key != "DATABASE_PRIVATE_URL" and any(k == "DATABASE_PRIVATE_URL" for k, _ in candidates):
+                print(
+                    f"Database: using {key} because private host {host!r} is not reachable.",
+                    file=sys.stderr,
+                )
+            return url
+
+    if candidates:
+        key, url = candidates[0]
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if host.endswith(".railway.internal"):
+            print(
+                f"ERROR: Cannot resolve database host {host!r}.\n"
+                "Railway private URLs (*.railway.internal) only work when backend and PostGIS\n"
+                "are in the SAME project and environment.\n\n"
+                "Fix (choose one):\n"
+                "  A) Backend Variables → remove DATABASE_PRIVATE_URL\n"
+                "     → add reference to PostGIS service → DATABASE_URL (public, *.proxy.rlwy.net)\n"
+                "  B) Ensure PostGIS + backend are in the same Railway project, then redeploy both.\n"
+                "  C) Do not paste postgis.railway.internal manually — use Variable Reference.",
+                file=sys.stderr,
+            )
+        return url
 
     # Railway/Heroku also expose discrete PG* vars when Postgres is linked.
     pg_host = (os.getenv("PGHOST") or os.getenv("POSTGRES_HOST") or "").strip()
-    if pg_host and "://" not in pg_host:
+    if pg_host and "://" not in pg_host and _host_resolvable(pg_host):
         pg_user = (os.getenv("PGUSER") or os.getenv("POSTGRES_USER") or "postgres").strip()
         pg_password = (os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD") or "").strip()
         pg_db = (os.getenv("PGDATABASE") or os.getenv("POSTGRES_DB") or "railway").strip()

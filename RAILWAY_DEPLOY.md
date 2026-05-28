@@ -24,7 +24,21 @@ you must use a **PostGIS-enabled** database, not standard Postgres.
 
 https://railway.com/deploy/supabase-postgres-1 — then run `CREATE EXTENSION IF NOT EXISTS postgis;` in the DB if needed.
 
-## Database connection
+## Database connection (PostGIS)
+
+Link **PostGIS** service variables to the web service.
+
+**If you see:** `failed to resolve host 'postgis.railway.internal'`
+
+- You used the **private** URL but backend cannot reach it.
+- **Fix:** On backend → Variables → **delete** `DATABASE_PRIVATE_URL`
+- **Add reference** from PostGIS → **`DATABASE_URL`** (host looks like `something.proxy.rlwy.net`)
+- Do **not** set `PGHOST=postgis.railway.internal` manually.
+- Redeploy.
+
+Use **Variable Reference**, not copy-paste from template docs.
+
+## Database connection (general)
 
 Link Postgres variables to the web service:
 

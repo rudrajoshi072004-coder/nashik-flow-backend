@@ -14,6 +14,7 @@ from apps.payouts.api import PayoutViewSet
 from apps.pricing.api import PricingRuleViewSet
 from apps.service_zones.api import ServiceZoneViewSet
 from apps.support.api import SupportTicketViewSet
+from apps.ride_socket_demo.views import DriversListView
 from apps.tracking.api import DriverLiveLocationViewSet
 from apps.users.api import UserViewSet
 from apps.vehicle_categories.api import VehicleCategoryViewSet
@@ -41,6 +42,7 @@ router.register(r"admin/ops", AdminOpsViewSet, basename="admin-ops")
 router.register(r"admin/audit-logs", AdminAuditLogViewSet, basename="admin-audit-logs")
 
 urlpatterns = [
+    path("drivers", DriversListView.as_view(), name="ride-demo-drivers"),
     path("admin/", admin.site.urls),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),

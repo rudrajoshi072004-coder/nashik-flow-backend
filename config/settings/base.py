@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.pricing",
     "apps.fare_rules",
     "apps.dispatch",
+    "apps.ride_socket_demo",
     "apps.tracking",
     "apps.trip_events",
     "apps.wallets",

@@ -108,17 +108,17 @@ def find_drivers_in_ring(
     pt = booking.pickup_location
     assert pt is not None
 
-    def build_qs(*, strict_kyc: bool, strict_category: bool) -> QuerySet[DriverLiveLocation]:
+    def build_qs(*, strict_kyc: bool, strict_category: bool, require_active_vehicle: bool = True) -> QuerySet[DriverLiveLocation]:
         q = _base_live_qs(strict_kyc=strict_kyc).exclude(driver_id__in=exclude_driver_ids).annotate(
             distance_m=Distance("location", pt)
         )
+        
         if strict_category:
-            q = q.filter(
-                driver__vehicles__category=booking.vehicle_category,
-                driver__vehicles__status=Vehicle.Status.ACTIVE,
-            )
-        else:
+            q = q.filter(driver__vehicles__category=booking.vehicle_category)
+            
+        if require_active_vehicle:
             q = q.filter(driver__vehicles__status=Vehicle.Status.ACTIVE)
+            
         if inner <= 0:
             q = q.filter(location__distance_lte=(pt, D(km=outer)))
         else:
@@ -128,13 +128,14 @@ def find_drivers_in_ring(
             )
         return q.order_by("distance_m").distinct()
 
-    # Prefer strict matching first; relax only when strict query is empty.
-    qs = build_qs(strict_kyc=True, strict_category=True)
+    # Fast Porter-style dispatch:
+    # 1. First attempt strict match (KYC + exact vehicle + active)
+    qs = build_qs(strict_kyc=True, strict_category=True, require_active_vehicle=True)
     rows = list(qs[:MAX_OFFER_BATCH])
+    
+    # 2. Immediate fallback if no strict matches are found (to ensure smooth flow, especially for test drivers)
     if not rows:
-        qs = build_qs(strict_kyc=True, strict_category=False)
+        qs = build_qs(strict_kyc=False, strict_category=False, require_active_vehicle=False)
         rows = list(qs[:MAX_OFFER_BATCH])
-    if not rows:
-        qs = build_qs(strict_kyc=False, strict_category=False)
-        rows = list(qs[:MAX_OFFER_BATCH])
+        
     return [(row, row.distance_m) for row in rows]

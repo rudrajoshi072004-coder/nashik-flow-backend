@@ -4,8 +4,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parents[3]
-load_dotenv(BASE_DIR / ".env")
+# Project root is nashik-flow-backend/ (config/settings -> config -> backend).
+BASE_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(BASE_DIR / ".env", override=False)
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-dev-key-change-this-to-32-plus-bytes")
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
@@ -101,12 +102,35 @@ TEMPLATES = [
 ]
 
 def _database_url_from_env() -> str:
-    # Accept common Render/hosting variable names.
-    for key in ("DATABASE_URL", "POSTGRES_URL", "INTERNAL_DATABASE_URL", "EXTERNAL_DATABASE_URL"):
+    # Railway, Render, Heroku, and similar PaaS variable names.
+    for key in (
+        "DATABASE_PRIVATE_URL",  # Railway internal URL (preferred in same project)
+        "DATABASE_URL",
+        "POSTGRES_URL",
+        "INTERNAL_DATABASE_URL",
+        "EXTERNAL_DATABASE_URL",
+        "RAILWAY_DATABASE_URL",
+    ):
         value = (os.getenv(key) or "").strip()
         if value:
             return value
+
+    # Railway/Heroku also expose discrete PG* vars when Postgres is linked.
+    pg_host = (os.getenv("PGHOST") or os.getenv("POSTGRES_HOST") or "").strip()
+    if pg_host and "://" not in pg_host:
+        pg_user = (os.getenv("PGUSER") or os.getenv("POSTGRES_USER") or "postgres").strip()
+        pg_password = (os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD") or "").strip()
+        pg_db = (os.getenv("PGDATABASE") or os.getenv("POSTGRES_DB") or "railway").strip()
+        pg_port = (os.getenv("PGPORT") or os.getenv("POSTGRES_PORT") or "5432").strip()
+        auth = f"{pg_user}:{pg_password}@" if pg_password else f"{pg_user}@"
+        return f"postgresql://{auth}{pg_host}:{pg_port}/{pg_db}"
+
     return ""
+
+
+def _is_local_db_host(host: str) -> bool:
+    normalized = (host or "").strip().lower()
+    return normalized in {"", "localhost", "127.0.0.1", "::1"}
 
 
 def _normalize_db_host(value: str) -> str:
@@ -135,8 +159,24 @@ def _database_from_env() -> dict:
             "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
         }
         sslmode = query.get("sslmode", [None])[0] or (os.getenv("POSTGRES_SSLMODE") or "").strip()
+        if not sslmode and not _is_local_db_host(db_config["HOST"]):
+            # Managed Postgres (Railway/Render) typically requires TLS.
+            sslmode = "require"
         if sslmode:
             db_config["OPTIONS"] = {"sslmode": sslmode}
+        return db_config
+
+    discrete_host = _normalize_db_host(os.getenv("POSTGRES_HOST", ""))
+    if discrete_host and not _is_local_db_host(discrete_host):
+        db_config = {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
+            "USER": os.getenv("POSTGRES_USER", "postgres"),
+            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
+            "HOST": discrete_host,
+            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+            "OPTIONS": {"sslmode": os.getenv("POSTGRES_SSLMODE", "require")},
+        }
         return db_config
 
     return {
@@ -196,7 +236,12 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
+REDIS_URL = (
+    os.getenv("REDIS_URL")
+    or os.getenv("REDIS_PRIVATE_URL")
+    or os.getenv("REDIS_TLS_URL")
+    or ""
+).strip()
 USE_REDIS = bool(REDIS_URL)
 
 if USE_REDIS:

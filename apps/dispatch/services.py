@@ -5,6 +5,7 @@ import uuid
 from typing import Any
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.bookings.models import Booking
 from apps.trip_events.models import TripEvent
@@ -154,25 +155,18 @@ def _offer_drivers(
 
     cumulative = [str(x) for x in previously_notified] + [str(x) for x in driver_ids]
     completed_ring_index = ring.index if ring is not None else max(0, len(iter_rings()) - 1)
-    try:
-        wait_after_offer_round.apply_async(
-            args=[str(booking.id), round_id, completed_ring_index, cumulative],
-            countdown=OFFER_WAIT_SECONDS,
-        )
-    except Exception:
-        logger.warning(
-            "dispatch: Celery unavailable for offer wait; advancing rings in-process after countdown",
-            extra={"booking_id": str(booking.id), "round_id": round_id},
-            exc_info=True,
-        )
-        import threading
-        import time
+    # Always wait in-process: Railway often has Redis but no Celery worker; eager Celery would
+    # fire wait_after_offer_round immediately and mark the booking failed before drivers can accept.
+    import threading
+    import time
 
-        def _advance_after_wait() -> None:
-            time.sleep(OFFER_WAIT_SECONDS)
-            wait_after_offer_round.run(str(booking.id), round_id, completed_ring_index, cumulative)
+    bid = str(booking.id)
 
-        threading.Thread(target=_advance_after_wait, daemon=True).start()
+    def _advance_after_wait() -> None:
+        time.sleep(OFFER_WAIT_SECONDS)
+        wait_after_offer_round.run(bid, round_id, completed_ring_index, cumulative)
+
+    threading.Thread(target=_advance_after_wait, daemon=True).start()
     return round_id, len(driver_ids)
 
 
@@ -215,10 +209,47 @@ def run_dispatch_for_ring(
     return _offer_drivers(booking=booking, rows=driver_rows, ring=ring, previously_notified=previously_notified)
 
 
+def _offer_grace_elapsed(*, booking: Booking, seconds: int = OFFER_WAIT_SECONDS) -> bool:
+    """Do not fail while drivers still have time to accept the latest offer round."""
+    from datetime import timedelta
+
+    from apps.trip_events.models import TripEvent
+
+    ev = (
+        TripEvent.objects.filter(booking=booking, event_type__in=(RIDE_OFFER_ROUND, RIDE_REQUEST_SENT))
+        .order_by("-created_at")
+        .first()
+    )
+    if not ev:
+        return True
+    return timezone.now() - ev.created_at >= timedelta(seconds=seconds)
+
+
 @transaction.atomic
 def mark_no_driver_available(*, booking: Booking) -> None:
     booking.refresh_from_db()
     if booking.state != Booking.BookingState.SEARCHING_DRIVER or booking.driver_id:
+        return
+    if not _offer_grace_elapsed(booking=booking):
+        logger.info(
+            "dispatch: deferring no_driver_found until offer grace elapses",
+            extra={"booking_id": str(booking.id)},
+        )
+
+        def _fail_later() -> None:
+            import time
+
+            time.sleep(OFFER_WAIT_SECONDS)
+            b = Booking.objects.filter(id=booking.id).first()
+            if not b or b.state != Booking.BookingState.SEARCHING_DRIVER or b.driver_id:
+                return
+            if not _offer_grace_elapsed(booking=b):
+                return
+            mark_no_driver_available(booking=b)
+
+        import threading
+
+        threading.Thread(target=_fail_later, daemon=True).start()
         return
     booking.state = Booking.BookingState.FAILED
     booking.save(update_fields=["state", "updated_at"])

@@ -118,7 +118,7 @@ def wait_after_offer_round(booking_id: str, round_id: str, completed_ring_index:
         return
 
     next_index = completed_ring_index + 1
-    continue_dispatch_rings.delay(str(booking.id), next_index, cumulative_notified)
+    continue_dispatch_rings.run(str(booking.id), next_index, cumulative_notified)
 
 
 @shared_task

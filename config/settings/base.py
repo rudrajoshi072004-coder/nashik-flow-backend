@@ -101,10 +101,23 @@ TEMPLATES = [
     }
 ]
 
+def _is_local_db_host(host: str) -> bool:
+    normalized = (host or "").strip().lower()
+    return normalized in {"", "localhost", "127.0.0.1", "::1"}
+
+
+def _is_railway_internal_host(host: str) -> bool:
+    return (host or "").strip().endswith(".railway.internal")
+
+
+def _host_from_database_url(url: str) -> str:
+    return (urlparse(url).hostname or "").strip()
+
+
 def _host_resolvable(hostname: str) -> bool:
     host = (hostname or "").strip()
     if not host or _is_local_db_host(host):
-        return True
+        return False
     import socket
 
     try:
@@ -114,14 +127,49 @@ def _host_resolvable(hostname: str) -> bool:
         return False
 
 
+def _is_usable_database_url(url: str) -> bool:
+    url = (url or "").strip()
+    if not url.startswith(("postgresql://", "postgres://")):
+        return False
+    if "@://" in url or url.count("@") > 1:
+        return False
+    host = _host_from_database_url(url)
+    if not host or _is_local_db_host(host):
+        return False
+    if _is_railway_internal_host(host) and not _host_resolvable(host):
+        return False
+    return True
+
+
+def _print_database_config_help(candidates: list[tuple[str, str]], *, reason: str) -> None:
+    import sys
+
+    lines = [f"ERROR: {reason}", ""]
+    for key, url in candidates:
+        host = _host_from_database_url(url) or "(missing host)"
+        lines.append(f"  - {key}: host={host!r}")
+    lines.extend(
+        [
+            "",
+            "Railway fix:",
+            "  1. On the web service, set DATABASE_URL to PostGIS DATABASE_PUBLIC_URL",
+            "     (host must be *.proxy.rlwy.net, not postgis.railway.internal).",
+            "  2. Remove PGDATA and POSTGRES_* from the web service (DB service only).",
+            "  3. PostGIS and backend must be in the same project for *.railway.internal.",
+            "  4. Redeploy the web service.",
+        ]
+    )
+    print("\n".join(lines), file=sys.stderr)
+
+
 def _database_url_from_env() -> str:
     import sys
 
-    # Railway, Render, Heroku, and similar PaaS variable names.
+    # Prefer public URL first (cross-project / TCP proxy on Railway).
     ordered_keys = (
-        "DATABASE_PRIVATE_URL",  # Railway internal (same project only)
+        "DATABASE_PUBLIC_URL",
         "DATABASE_URL",
-        "DATABASE_PUBLIC_URL",  # Railway TCP proxy URL
+        "DATABASE_PRIVATE_URL",
         "POSTGRES_URL",
         "INTERNAL_DATABASE_URL",
         "EXTERNAL_DATABASE_URL",
@@ -133,38 +181,54 @@ def _database_url_from_env() -> str:
         if value:
             candidates.append((key, value))
 
-    for key, url in candidates:
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
+    usable = [(key, url) for key, url in candidates if _is_usable_database_url(url)]
+
+    for key, url in usable:
+        host = _host_from_database_url(url)
         if _host_resolvable(host):
-            if key != "DATABASE_PRIVATE_URL" and any(k == "DATABASE_PRIVATE_URL" for k, _ in candidates):
+            skipped_internal = [
+                k
+                for k, u in candidates
+                if k in ("DATABASE_URL", "DATABASE_PRIVATE_URL")
+                and _is_railway_internal_host(_host_from_database_url(u))
+                and not _is_usable_database_url(u)
+            ]
+            if skipped_internal and key == "DATABASE_PUBLIC_URL":
                 print(
-                    f"Database: using {key} because private host {host!r} is not reachable.",
+                    "Database: using DATABASE_PUBLIC_URL "
+                    f"(skipped unusable: {', '.join(skipped_internal)}).",
+                    file=sys.stderr,
+                )
+            elif key not in ("DATABASE_URL", "DATABASE_PUBLIC_URL") and any(
+                k == "DATABASE_PUBLIC_URL" for k, _ in usable
+            ):
+                print(
+                    f"Database: using {key} (DATABASE_PUBLIC_URL also set).",
                     file=sys.stderr,
                 )
             return url
 
-    if candidates:
-        key, url = candidates[0]
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-        if host.endswith(".railway.internal"):
-            print(
-                f"ERROR: Cannot resolve database host {host!r}.\n"
-                "Railway private URLs (*.railway.internal) only work when backend and PostGIS\n"
-                "are in the SAME project and environment.\n\n"
-                "Fix (choose one):\n"
-                "  A) Backend Variables → remove DATABASE_PRIVATE_URL\n"
-                "     → add reference to PostGIS service → DATABASE_URL (public, *.proxy.rlwy.net)\n"
-                "  B) Ensure PostGIS + backend are in the same Railway project, then redeploy both.\n"
-                "  C) Do not paste postgis.railway.internal manually — use Variable Reference.",
-                file=sys.stderr,
-            )
-        return url
+    # Public Railway proxy hostnames may not resolve at import time; still use them.
+    for key, url in usable:
+        host = _host_from_database_url(url)
+        if ".proxy.rlwy.net" in host or not _is_railway_internal_host(host):
+            return url
 
-    # Railway/Heroku also expose discrete PG* vars when Postgres is linked.
+    if candidates:
+        _print_database_config_help(
+            candidates,
+            reason="No usable database URL (localhost, missing host, or unreachable *.railway.internal).",
+        )
+    elif (os.getenv("POSTGRES_USER") or os.getenv("POSTGRES_PASSWORD") or os.getenv("POSTGRES_DB")) and not (
+        os.getenv("PGHOST") or os.getenv("POSTGRES_HOST")
+    ):
+        _print_database_config_help(
+            [],
+            reason="POSTGRES_USER/PASSWORD/DB are set on the web service without DATABASE_URL or PGHOST.",
+        )
+
     pg_host = (os.getenv("PGHOST") or os.getenv("POSTGRES_HOST") or "").strip()
-    if pg_host and "://" not in pg_host and _host_resolvable(pg_host):
+    if pg_host and "://" not in pg_host and not _is_local_db_host(pg_host) and _host_resolvable(pg_host):
         pg_user = (os.getenv("PGUSER") or os.getenv("POSTGRES_USER") or "postgres").strip()
         pg_password = (os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD") or "").strip()
         pg_db = (os.getenv("PGDATABASE") or os.getenv("POSTGRES_DB") or "railway").strip()
@@ -175,16 +239,10 @@ def _database_url_from_env() -> str:
     return ""
 
 
-def _is_local_db_host(host: str) -> bool:
-    normalized = (host or "").strip().lower()
-    return normalized in {"", "localhost", "127.0.0.1", "::1"}
-
-
 def _normalize_db_host(value: str) -> str:
     host = (value or "").strip()
     if not host:
-        return "localhost"
-    # Some deployments accidentally paste a full URL into POSTGRES_HOST.
+        return ""
     if "://" in host:
         parsed = urlparse(host)
         if parsed.hostname:
@@ -193,47 +251,51 @@ def _normalize_db_host(value: str) -> str:
 
 
 def _database_from_env() -> dict:
+    from django.core.exceptions import ImproperlyConfigured
+
     database_url = _database_url_from_env()
     if database_url:
         parsed = urlparse(database_url)
         query = parse_qs(parsed.query)
+        host = _normalize_db_host(parsed.hostname or "")
+        if not host or _is_local_db_host(host):
+            raise ImproperlyConfigured(
+                "DATABASE_URL is set but has no remote host. "
+                "Set DATABASE_URL to your Railway DATABASE_PUBLIC_URL (*.proxy.rlwy.net)."
+            )
         db_config = {
             "ENGINE": "django.contrib.gis.db.backends.postgis",
             "NAME": (parsed.path or "/").lstrip("/") or os.getenv("POSTGRES_DB", "nashik_logistics"),
             "USER": unquote(parsed.username or "") or os.getenv("POSTGRES_USER", "postgres"),
             "PASSWORD": unquote(parsed.password or "") or os.getenv("POSTGRES_PASSWORD", "postgres"),
-            "HOST": _normalize_db_host(parsed.hostname or os.getenv("POSTGRES_HOST", "localhost")),
+            "HOST": host,
             "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
         }
         sslmode = query.get("sslmode", [None])[0] or (os.getenv("POSTGRES_SSLMODE") or "").strip()
         if not sslmode and not _is_local_db_host(db_config["HOST"]):
-            # Managed Postgres (Railway/Render) typically requires TLS.
             sslmode = "require"
         if sslmode:
             db_config["OPTIONS"] = {"sslmode": sslmode}
         return db_config
 
-    discrete_host = _normalize_db_host(os.getenv("POSTGRES_HOST", ""))
+    discrete_host = _normalize_db_host(os.getenv("PGHOST") or os.getenv("POSTGRES_HOST") or "")
     if discrete_host and not _is_local_db_host(discrete_host):
-        db_config = {
+        return {
             "ENGINE": "django.contrib.gis.db.backends.postgis",
-            "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
-            "USER": os.getenv("POSTGRES_USER", "postgres"),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
+            "NAME": os.getenv("PGDATABASE") or os.getenv("POSTGRES_DB", "nashik_logistics"),
+            "USER": os.getenv("PGUSER") or os.getenv("POSTGRES_USER", "postgres"),
+            "PASSWORD": os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD", "postgres"),
             "HOST": discrete_host,
-            "PORT": os.getenv("POSTGRES_PORT", "5432"),
+            "PORT": os.getenv("PGPORT") or os.getenv("POSTGRES_PORT", "5432"),
             "OPTIONS": {"sslmode": os.getenv("POSTGRES_SSLMODE", "require")},
         }
-        return db_config
 
-    return {
-        "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": os.getenv("POSTGRES_DB", "nashik_logistics"),
-        "USER": os.getenv("POSTGRES_USER", "postgres"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
-        "HOST": _normalize_db_host(os.getenv("POSTGRES_HOST", "localhost")),
-        "PORT": os.getenv("POSTGRES_PORT", "5432"),
-    }
+    raise ImproperlyConfigured(
+        "PostgreSQL is not configured for production. "
+        "On Railway, set DATABASE_URL to the PostGIS service DATABASE_PUBLIC_URL "
+        "(postgresql://...@....proxy.rlwy.net:.../...). "
+        "Remove POSTGRES_* and PGDATA from the web service."
+    )
 
 
 DATABASES = {"default": _database_from_env()}

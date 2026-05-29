@@ -30,11 +30,16 @@ Link **PostGIS** service variables to the web service.
 
 **If you see:** `failed to resolve host 'postgis.railway.internal'`
 
-- You used the **private** URL but backend cannot reach it.
-- **Fix:** On backend → Variables → **delete** `DATABASE_PRIVATE_URL`
-- **Add reference** from PostGIS → **`DATABASE_URL`** (host looks like `something.proxy.rlwy.net`)
-- Do **not** set `PGHOST=postgis.railway.internal` manually.
+- You used the **private** URL but backend cannot reach it (often DB and web are in **different projects**).
+- **Fix:** On backend → set **`DATABASE_URL`** = PostGIS **`DATABASE_PUBLIC_URL`** (`*.proxy.rlwy.net`)
+- **Remove** `DATABASE_URL` values containing `postgis.railway.internal`
+- **Remove** `PGDATA`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` from the **web** service
 - Redeploy.
+
+**If you see:** `connection to server at "127.0.0.1", port 5432 failed`
+
+- `DATABASE_URL` is missing/invalid; only `POSTGRES_*` vars are set on the web service.
+- **Fix:** same as above — one full **`DATABASE_URL`** with public host.
 
 Use **Variable Reference**, not copy-paste from template docs.
 

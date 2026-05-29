@@ -59,6 +59,9 @@ _DRIVER_OCCUPIED_STATES: frozenset[str] = frozenset(
 # This protects drivers from being stuck "busy" due abandoned test/failed lifecycle updates.
 OCCUPIED_BOOKING_STALE_AFTER = timedelta(hours=2)
 
+# After accept, drivers who never progress still block matching; release sooner for repeat QA bookings.
+ACCEPTED_ONLY_BUSY_WINDOW = timedelta(minutes=3)
+
 
 @dataclass(frozen=True)
 class RingDef:
@@ -74,15 +77,26 @@ def iter_rings() -> list[RingDef]:
 def _not_on_active_trip() -> Q:
     from apps.bookings.models import Booking as B
 
-    recent_cutoff = timezone.now() - OCCUPIED_BOOKING_STALE_AFTER
-    busy_driver_ids = (
-        B.objects.filter(
-            is_deleted=False,
-            state__in=_DRIVER_OCCUPIED_STATES,
-            updated_at__gte=recent_cutoff,
-        ).values("driver_id")
-    )
-    return ~Q(driver_id__in=busy_driver_ids)
+    now = timezone.now()
+    recent_cutoff = now - OCCUPIED_BOOKING_STALE_AFTER
+    accept_cutoff = now - ACCEPTED_ONLY_BUSY_WINDOW
+    progressed_states = _DRIVER_OCCUPIED_STATES - {
+        B.BookingState.DRIVER_ACCEPTED,
+        B.BookingState.DRIVER_ASSIGNED,
+    }
+    busy_progressed = B.objects.filter(
+        is_deleted=False,
+        state__in=progressed_states,
+        updated_at__gte=recent_cutoff,
+        driver_id__isnull=False,
+    ).values("driver_id")
+    busy_accept_only = B.objects.filter(
+        is_deleted=False,
+        state__in={B.BookingState.DRIVER_ACCEPTED, B.BookingState.DRIVER_ASSIGNED},
+        updated_at__gte=accept_cutoff,
+        driver_id__isnull=False,
+    ).values("driver_id")
+    return ~Q(driver_id__in=busy_progressed) & ~Q(driver_id__in=busy_accept_only)
 
 
 def _base_live_qs(*, strict_kyc: bool = True) -> QuerySet[DriverLiveLocation]:
@@ -149,14 +163,30 @@ def find_drivers_in_ring(
 def _busy_driver_ids() -> list:
     from apps.bookings.models import Booking as B
 
-    recent_cutoff = timezone.now() - OCCUPIED_BOOKING_STALE_AFTER
-    return list(
+    now = timezone.now()
+    recent_cutoff = now - OCCUPIED_BOOKING_STALE_AFTER
+    accept_cutoff = now - ACCEPTED_ONLY_BUSY_WINDOW
+    progressed_states = _DRIVER_OCCUPIED_STATES - {
+        B.BookingState.DRIVER_ACCEPTED,
+        B.BookingState.DRIVER_ASSIGNED,
+    }
+    progressed = set(
         B.objects.filter(
             is_deleted=False,
-            state__in=_DRIVER_OCCUPIED_STATES,
+            state__in=progressed_states,
             updated_at__gte=recent_cutoff,
+            driver_id__isnull=False,
         ).values_list("driver_id", flat=True)
     )
+    accept_only = set(
+        B.objects.filter(
+            is_deleted=False,
+            state__in={B.BookingState.DRIVER_ACCEPTED, B.BookingState.DRIVER_ASSIGNED},
+            updated_at__gte=accept_cutoff,
+            driver_id__isnull=False,
+        ).values_list("driver_id", flat=True)
+    )
+    return list(progressed | accept_only)
 
 
 def find_online_profiles_without_live_location(

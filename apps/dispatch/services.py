@@ -82,6 +82,8 @@ def _broadcast_driver_provisional_assign(*, booking: Booking, driver_profile, di
         payload=assignment_payload,
     )
     broadcast_event(f"driver_{driver_profile.id}", "driver_assigned", assignment_payload)
+    # Drivers always join `user_<user_id>` on connect; duplicate so offers are not missed.
+    broadcast_event(f"user_{driver_profile.user_id}", "driver_assigned", assignment_payload)
 
 
 def _record_offer_round(
@@ -290,6 +292,7 @@ def _broadcast_customer_driver_assigned(*, booking: Booking) -> None:
         "booking_id": str(booking.id),
         "driver_id": str(driver_profile.id),
         "driver_phone": driver_profile.user.phone,
+        "offer": False,
     }
     broadcast_event(f"booking_{booking.id}", "driver_assigned", assignment_payload)
     broadcast_event(f"user_{booking.customer_id}", "driver_assigned", assignment_payload)

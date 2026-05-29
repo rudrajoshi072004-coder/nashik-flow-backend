@@ -13,7 +13,7 @@ from apps.dispatch.tasks import dispatch_booking
 from .models import Booking
 from .querysets import bookings_queryset_for_driver_user
 from .serializers import BookingSerializer, FareEstimateSerializer
-from .services import transition_booking_state
+from .services import release_customer_previous_active_trips, transition_booking_state
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,10 @@ class BookingViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         booking = serializer.save(customer=self.request.user, state=Booking.BookingState.PENDING_QUOTE)
         bid = str(booking.id)
+        try:
+            release_customer_previous_active_trips(customer=self.request.user, new_booking_id=bid)
+        except Exception:
+            logger.exception("release_customer_previous_active_trips failed", extra={"booking_id": bid})
         # Run dispatch in-process so drivers get WebSocket offers even when REDIS_URL is set but no Celery
         # worker dequeues `.delay(...)` tasks (common single-dyno Render setups).
         try:

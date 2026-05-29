@@ -34,7 +34,9 @@ def update_driver_location(
     booking_id: str | None = None,
 ):
     throttle_key = f"driver_location_throttle:{driver_profile.id}"
-    if cache.get(throttle_key):
+    # First GPS row is required for ring matching; never throttle go-online / first fix.
+    has_live_row = DriverLiveLocation.objects.filter(driver=driver_profile).exists()
+    if has_live_row and cache.get(throttle_key):
         return None
 
     booking = None

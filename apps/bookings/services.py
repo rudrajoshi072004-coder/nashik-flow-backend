@@ -1,7 +1,10 @@
 from dataclasses import dataclass
+
 from django.db import transaction
+
 from apps.trip_events.models import TripEvent
-from apps.trip_events.services import broadcast_event
+from apps.trip_events.services import broadcast_event, record_trip_event
+
 from .models import Booking
 
 
@@ -121,6 +124,65 @@ def _accept_ride_while_searching(
         if locked.driver_id:
             broadcast_event(f"driver_{locked.driver_id}", lifecycle_event, event_payload)
     return TransitionResult(str(locked.id), locked.state, event.sequence)
+
+
+# When the same customer books again, close their prior in-progress trip so the driver can receive the new offer.
+_CUSTOMER_REBOOK_RELEASE_STATES = frozenset(
+    {
+        Booking.BookingState.DRIVER_ASSIGNED,
+        Booking.BookingState.DRIVER_ACCEPTED,
+        Booking.BookingState.DRIVER_ARRIVING,
+        Booking.BookingState.DRIVER_ARRIVED,
+        Booking.BookingState.PICKUP_OTP_PENDING,
+        Booking.BookingState.TRIP_STARTED,
+        Booking.BookingState.IN_TRANSIT,
+        Booking.BookingState.NEARING_DROP,
+        Booking.BookingState.PAYMENT_PENDING,
+    }
+)
+
+
+def release_customer_previous_active_trips(*, customer, new_booking_id: str) -> int:
+    """Complete this customer's other active trips (repeat booking / QA flow)."""
+    qs = (
+        Booking.objects.filter(
+            customer=customer,
+            is_deleted=False,
+            driver_id__isnull=False,
+            state__in=_CUSTOMER_REBOOK_RELEASE_STATES,
+        )
+        .exclude(id=new_booking_id)
+        .select_related("driver", "driver__user")
+    )
+    count = 0
+    for booking in qs:
+        from_state = booking.state
+        booking.state = Booking.BookingState.COMPLETED
+        booking.save(update_fields=["state", "updated_at"])
+        record_trip_event(
+            booking=booking,
+            event_type="booking_state_changed",
+            from_state=from_state,
+            to_state=booking.state,
+            payload={"reason": "customer_new_booking"},
+        )
+        payload = {
+            "booking_id": str(booking.id),
+            "state": booking.state,
+            "previous_state": from_state,
+        }
+        broadcast_event(f"booking_{booking.id}", "booking_status_update", payload)
+        broadcast_event(f"user_{booking.customer_id}", "booking_status_update", payload)
+        if booking.driver_id:
+            broadcast_event(f"driver_{booking.driver_id}", "booking_status_update", payload)
+            broadcast_event(f"user_{booking.driver.user_id}", "booking_status_update", payload)
+            broadcast_event(
+                f"driver_{booking.driver_id}",
+                "ride_request_cancelled",
+                {"booking_id": str(booking.id), "reason": "customer_new_booking"},
+            )
+        count += 1
+    return count
 
 
 def transition_booking_state(

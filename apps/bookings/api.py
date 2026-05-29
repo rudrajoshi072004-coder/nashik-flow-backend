@@ -126,12 +126,19 @@ class BookingViewSet(viewsets.ModelViewSet):
                 message="Forbidden",
                 status_code=status.HTTP_403_FORBIDDEN,
             )
-        result = transition_booking_state(
-            booking=booking,
-            to_state=target_state,
-            actor=request.user,
-            payload=serializer.validated_data.get("payload", {}),
-        )
+        try:
+            result = transition_booking_state(
+                booking=booking,
+                to_state=target_state,
+                actor=request.user,
+                payload=serializer.validated_data.get("payload", {}),
+            )
+        except ValueError as exc:
+            return success_response(
+                {"detail": str(exc)},
+                message="Invalid transition",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
         return success_response({"booking_id": result.booking_id, "state": result.new_state, "seq": result.seq})
 
     @action(detail=True, methods=["post"], url_path="admin-update-state", permission_classes=[IsAdminRole])

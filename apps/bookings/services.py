@@ -63,7 +63,7 @@ def _accept_ride_while_searching(
         if locked.state != Booking.BookingState.SEARCHING_DRIVER:
             raise ValueError("Booking is not accepting offers.")
         if locked.driver_id:
-            raise ValueError("A driver is already connected to this booking.")
+            raise ValueError("Trip already accepted by another driver.")
         if not driver_had_ride_request(booking=locked, driver_profile=profile):
             raise ValueError("This driver is not in the current offer pool.")
         if _driver_is_busy_on_another_trip(profile=profile, current_booking=locked):
@@ -94,6 +94,26 @@ def _accept_ride_while_searching(
     broadcast_event(f"booking_{locked.id}", "booking_status_update", event_payload)
     broadcast_event(f"user_{locked.customer_id}", "booking_status_update", event_payload)
     broadcast_event(f"driver_{locked.driver_id}", "booking_status_update", event_payload)
+
+    # Porter-style customer event: driver accepted — includes contact + vehicle for live tracking UI.
+    from apps.vehicles.models import Vehicle
+
+    vehicle = profile.vehicles.filter(status=Vehicle.Status.ACTIVE).select_related("category").first()
+    trip_accepted_payload = {
+        **event_payload,
+        "driver_id": str(profile.id),
+        "driver_phone": profile.user.phone,
+        "driver_name": profile.user.phone,
+        "vehicle_number": vehicle.registration_number if vehicle else "",
+        "vehicle_type": vehicle.category.name if vehicle and vehicle.category_id else "",
+        "rating_avg": str(profile.rating_avg),
+        "pickup_address_text": locked.pickup_address_text or "",
+        "drop_address_text": locked.drop_address_text or "",
+    }
+    broadcast_event(f"booking_{locked.id}", "trip_accepted", trip_accepted_payload)
+    broadcast_event(f"user_{locked.customer_id}", "trip_accepted", trip_accepted_payload)
+    broadcast_event(f"booking_{locked.id}", "trip_status_update", trip_accepted_payload)
+    broadcast_event(f"user_{locked.customer_id}", "trip_status_update", trip_accepted_payload)
     lifecycle_event = _map_state_event(locked.state)
     if lifecycle_event:
         broadcast_event(f"booking_{locked.id}", lifecycle_event, event_payload)

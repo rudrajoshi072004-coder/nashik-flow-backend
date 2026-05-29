@@ -130,6 +130,24 @@ class BookingSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         customer = getattr(instance, "customer", None)
         data["customer_phone"] = getattr(customer, "phone", None) if customer is not None else None
+        profile = getattr(instance, "driver", None)
+        if profile is not None:
+            from apps.vehicles.models import Vehicle
+
+            vehicle = (
+                profile.vehicles.filter(status=Vehicle.Status.ACTIVE).select_related("category").first()
+            )
+            user = profile.user
+            data["driver_summary"] = {
+                "driver_id": str(profile.id),
+                "driver_name": getattr(user, "phone", "") or "Driver",
+                "driver_phone": getattr(user, "phone", ""),
+                "vehicle_number": vehicle.registration_number if vehicle else "",
+                "vehicle_type": vehicle.category.name if vehicle and vehicle.category_id else "",
+                "rating_avg": str(profile.rating_avg),
+            }
+        else:
+            data["driver_summary"] = None
         return data
 
 

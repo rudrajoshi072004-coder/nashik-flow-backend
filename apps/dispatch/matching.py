@@ -6,7 +6,7 @@ Rings (km from pickup), outer radius inclusive, inner exclusive (except first ri
   Round 2 → 2–5
   Round 3 → 5–10
   Round 4 → 10–20
-Maximum search radius: 20 km.
+Maximum ring radius: 100 km (plus any-online fallback).
 """
 
 from __future__ import annotations
@@ -31,7 +31,12 @@ RADIUS_RINGS_KM: tuple[tuple[float, float], ...] = (
     (2.0, 5.0),
     (5.0, 10.0),
     (10.0, 20.0),
+    # Wide ring for QA / emulator GPS drift (phones often report coords far from Nashik pickup).
+    (20.0, 100.0),
 )
+
+# Last resort when ring expansion finds nobody: any online driver with a live location row.
+FALLBACK_ANY_ONLINE_MAX = 5
 
 MAX_OFFER_BATCH = 5
 
@@ -138,4 +143,28 @@ def find_drivers_in_ring(
         qs = build_qs(strict_kyc=False, strict_category=False, require_active_vehicle=False)
         rows = list(qs[:MAX_OFFER_BATCH])
         
+    return [(row, row.distance_m) for row in rows]
+
+
+def find_any_online_drivers(
+    *,
+    booking: Booking,
+    exclude_driver_ids: list | None = None,
+) -> list[tuple[DriverLiveLocation, Any]]:
+    """
+    Notify online drivers regardless of distance (still requires a live location row).
+    Used only after normal rings are exhausted.
+    """
+    exclude_driver_ids = [str(x) for x in (exclude_driver_ids or [])]
+    pt = booking.pickup_location
+    if pt is None:
+        return []
+    qs = (
+        _base_live_qs(strict_kyc=False)
+        .exclude(driver_id__in=exclude_driver_ids)
+        .annotate(distance_m=Distance("location", pt))
+        .order_by("distance_m")
+        .distinct()
+    )
+    rows = list(qs[:FALLBACK_ANY_ONLINE_MAX])
     return [(row, row.distance_m) for row in rows]

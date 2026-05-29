@@ -9,6 +9,7 @@ from .matching import iter_rings
 from .services import (
     is_latest_offer_round,
     mark_no_driver_available,
+    run_dispatch_any_online_fallback,
     run_dispatch_for_ring,
 )
 
@@ -57,6 +58,11 @@ def continue_dispatch_rings(booking_id: str, ring_index: int, cumulative_notifie
 
     rings = iter_rings()
     if ring_index >= len(rings):
+        round_id, offered = run_dispatch_any_online_fallback(
+            booking=booking, previously_notified=cumulative_notified
+        )
+        if offered:
+            return
         mark_no_driver_available(booking=booking)
         return
 

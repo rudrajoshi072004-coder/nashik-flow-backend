@@ -10,7 +10,7 @@ from apps.common.api.responses import success_response
 from apps.common.permissions.rbac import IsDriverRole
 from apps.users.models import User
 from .models import DriverProfile
-from .serializers import DriverAvailabilitySerializer, DriverProfileSerializer
+from .serializers import DriverAvailabilitySerializer, DriverLocationSerializer, DriverProfileSerializer
 
 
 class DriverViewSet(viewsets.ViewSet):
@@ -52,6 +52,34 @@ class DriverViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return success_response(serializer.data, message="Driver profile updated")
+
+    @action(detail=False, methods=["post"], url_path="location")
+    def post_location(self, request):
+        """REST fallback when WebSocket location events are delayed (common on mobile)."""
+        serializer = DriverLocationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = self.get_object()
+        if not profile:
+            return self._missing_profile_response()
+        if not profile.is_online:
+            return success_response(
+                {"detail": "Driver is offline; go online to publish location."},
+                message="Offline",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        from apps.tracking.services import update_driver_location
+
+        data = serializer.validated_data
+        update_driver_location(
+            driver_profile=profile,
+            lat=float(data["lat"]),
+            lng=float(data["lng"]),
+            heading=float(data.get("heading") or 0),
+            speed_kmph=float(data.get("speed_kmph") or 0),
+            accuracy_m=float(data.get("accuracy_m") or 0),
+            booking_id=str(data["booking_id"]) if data.get("booking_id") else None,
+        )
+        return success_response({"ok": True}, message="Location updated")
 
     @action(detail=False, methods=["post"], url_path="availability")
     def availability(self, request):

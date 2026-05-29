@@ -10,7 +10,7 @@ from apps.bookings.models import Booking
 from apps.trip_events.models import TripEvent
 from apps.trip_events.services import broadcast_event, record_trip_event
 
-from .matching import find_drivers_in_ring, RingDef
+from .matching import find_any_online_drivers, find_drivers_in_ring, iter_rings, RingDef
 
 # TripEvent.event_type (no new DB fields)
 RIDE_REQUEST_SENT = "ride_request_sent"
@@ -99,6 +99,87 @@ def _record_offer_round(
     )
 
 
+def _offer_drivers(
+    *,
+    booking: Booking,
+    rows: list,
+    ring: RingDef | None,
+    previously_notified: list[str] | None,
+) -> tuple[str | None, int]:
+    """Shared path to push provisional offers and schedule the offer wait."""
+    previously_notified = list(previously_notified or [])
+    if not rows:
+        return None, 0
+    round_id = str(uuid.uuid4())
+    driver_ids: list[str] = []
+    for loc, dist in rows:
+        d = loc.driver
+        driver_ids.append(str(d.id))
+        _broadcast_driver_provisional_assign(
+            booking=booking,
+            driver_profile=d,
+            distance_m=float(dist.m) if hasattr(dist, "m") else float(dist),
+        )
+    if ring is not None:
+        _record_offer_round(booking=booking, ring=ring, round_id=round_id, driver_ids=driver_ids)
+    else:
+        record_trip_event(
+            booking=booking,
+            event_type=RIDE_OFFER_ROUND,
+            payload={
+                "round_id": round_id,
+                "ring_index": -1,
+                "inner_km": None,
+                "outer_km": None,
+                "driver_ids": driver_ids,
+                "fallback": "any_online",
+            },
+        )
+    logger.info(
+        "dispatch: provisional offers pushed to drivers via WebSocket (driver_<id>)",
+        extra={
+            "booking_id": str(booking.id),
+            "round_id": round_id,
+            "ring_index": ring.index if ring else -1,
+            "offered_driver_ids": driver_ids,
+            "fallback": ring is None,
+        },
+    )
+    from .tasks import wait_after_offer_round  # local import avoids circular
+
+    cumulative = [str(x) for x in previously_notified] + [str(x) for x in driver_ids]
+    completed_ring_index = ring.index if ring is not None else max(0, len(iter_rings()) - 1)
+    try:
+        wait_after_offer_round.apply_async(
+            args=[str(booking.id), round_id, completed_ring_index, cumulative],
+            countdown=OFFER_WAIT_SECONDS,
+        )
+    except Exception:
+        logger.warning(
+            "dispatch: Celery unavailable for offer wait; advancing rings in-process after countdown",
+            extra={"booking_id": str(booking.id), "round_id": round_id},
+            exc_info=True,
+        )
+        import threading
+        import time
+
+        def _advance_after_wait() -> None:
+            time.sleep(OFFER_WAIT_SECONDS)
+            wait_after_offer_round.run(str(booking.id), round_id, completed_ring_index, cumulative)
+
+        threading.Thread(target=_advance_after_wait, daemon=True).start()
+    return round_id, len(driver_ids)
+
+
+def run_dispatch_any_online_fallback(
+    *, booking: Booking, previously_notified: list[str] | None = None
+) -> tuple[str | None, int]:
+    """After ring expansion: offer nearest online drivers regardless of distance."""
+    previously_notified = list(previously_notified or [])
+    rows = find_any_online_drivers(booking=booking, exclude_driver_ids=previously_notified)
+    return _offer_drivers(booking=booking, rows=rows, ring=None, previously_notified=previously_notified)
+
+
 def run_dispatch_for_ring(
     *, booking: Booking, ring: RingDef, previously_notified: list[str] | None = None
 ) -> tuple[str | None, int]:
@@ -125,36 +206,7 @@ def run_dispatch_for_ring(
             },
         )
         return None, 0
-    round_id = str(uuid.uuid4())
-    driver_ids: list[str] = []
-    for loc, dist in rows:
-        d = loc.driver
-        driver_ids.append(str(d.id))
-        _broadcast_driver_provisional_assign(
-            booking=booking,
-            driver_profile=d,
-            distance_m=float(dist.m) if hasattr(dist, "m") else float(dist),
-        )
-    _record_offer_round(booking=booking, ring=ring, round_id=round_id, driver_ids=driver_ids)
-    logger.info(
-        "dispatch: provisional offers pushed to drivers via WebSocket (driver_<id>)",
-        extra={
-            "booking_id": str(booking.id),
-            "round_id": round_id,
-            "ring_index": ring.index,
-            "offered_driver_ids": driver_ids,
-            "pickup_lat": pickup_lat,
-            "pickup_lng": pickup_lng,
-            "vehicle_category_id": str(booking.vehicle_category_id),
-        },
-    )
-    from .tasks import wait_after_offer_round  # local import avoids circular
-
-    cumulative = [str(x) for x in previously_notified] + [str(x) for x in driver_ids]
-    wait_after_offer_round.apply_async(
-        args=[str(booking.id), round_id, ring.index, cumulative], countdown=OFFER_WAIT_SECONDS
-    )
-    return round_id, len(driver_ids)
+    return _offer_drivers(booking=booking, rows=rows, ring=ring, previously_notified=previously_notified)
 
 
 @transaction.atomic

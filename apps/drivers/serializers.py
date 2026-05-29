@@ -12,3 +12,12 @@ class DriverProfileSerializer(serializers.ModelSerializer):
 
 class DriverAvailabilitySerializer(serializers.Serializer):
     is_online = serializers.BooleanField()
+
+
+class DriverLocationSerializer(serializers.Serializer):
+    lat = serializers.FloatField()
+    lng = serializers.FloatField()
+    heading = serializers.FloatField(required=False, default=0)
+    speed_kmph = serializers.FloatField(required=False, default=0)
+    accuracy_m = serializers.FloatField(required=False, default=0)
+    booking_id = serializers.UUIDField(required=False, allow_null=True)

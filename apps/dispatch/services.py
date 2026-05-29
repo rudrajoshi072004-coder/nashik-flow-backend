@@ -112,13 +112,18 @@ def _offer_drivers(
         return None, 0
     round_id = str(uuid.uuid4())
     driver_ids: list[str] = []
-    for loc, dist in rows:
-        d = loc.driver
+    for d, dist in rows:
         driver_ids.append(str(d.id))
+        if dist is None:
+            distance_m = 0.0
+        elif hasattr(dist, "m"):
+            distance_m = float(dist.m)
+        else:
+            distance_m = float(dist)
         _broadcast_driver_provisional_assign(
             booking=booking,
             driver_profile=d,
-            distance_m=float(dist.m) if hasattr(dist, "m") else float(dist),
+            distance_m=distance_m,
         )
     if ring is not None:
         _record_offer_round(booking=booking, ring=ring, round_id=round_id, driver_ids=driver_ids)
@@ -206,7 +211,8 @@ def run_dispatch_for_ring(
             },
         )
         return None, 0
-    return _offer_drivers(booking=booking, rows=rows, ring=ring, previously_notified=previously_notified)
+    driver_rows = [(loc.driver, dist) for loc, dist in rows]
+    return _offer_drivers(booking=booking, rows=driver_rows, ring=ring, previously_notified=previously_notified)
 
 
 @transaction.atomic

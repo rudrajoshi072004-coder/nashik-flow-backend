@@ -88,8 +88,25 @@ class DriverViewSet(viewsets.ViewSet):
         profile = self.get_object()
         if not profile:
             return self._missing_profile_response()
-        profile.is_online = serializer.validated_data["is_online"]
+        going_online = serializer.validated_data["is_online"]
+        profile.is_online = going_online
         profile.save(update_fields=["is_online", "updated_at"])
+        if going_online:
+            data = serializer.validated_data
+            lat = data.get("lat")
+            lng = data.get("lng")
+            if lat is not None and lng is not None:
+                from apps.tracking.services import update_driver_location
+
+                update_driver_location(
+                    driver_profile=profile,
+                    lat=float(lat),
+                    lng=float(lng),
+                    heading=float(data.get("heading") or 0),
+                    speed_kmph=float(data.get("speed_kmph") or 0),
+                    accuracy_m=float(data.get("accuracy_m") or 0),
+                    booking_id=None,
+                )
         return success_response(DriverProfileSerializer(profile).data, message="Availability updated")
 
     @action(detail=False, methods=["get"], url_path="bookings")

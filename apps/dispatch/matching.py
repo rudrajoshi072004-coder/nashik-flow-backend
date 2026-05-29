@@ -146,19 +146,50 @@ def find_drivers_in_ring(
     return [(row, row.distance_m) for row in rows]
 
 
+def _busy_driver_ids() -> list:
+    from apps.bookings.models import Booking as B
+
+    recent_cutoff = timezone.now() - OCCUPIED_BOOKING_STALE_AFTER
+    return list(
+        B.objects.filter(
+            is_deleted=False,
+            state__in=_DRIVER_OCCUPIED_STATES,
+            updated_at__gte=recent_cutoff,
+        ).values_list("driver_id", flat=True)
+    )
+
+
+def find_online_profiles_without_live_location(
+    *,
+    exclude_driver_ids: list | None = None,
+    limit: int = FALLBACK_ANY_ONLINE_MAX,
+) -> list[DriverProfile]:
+    """Drivers marked online on the server but with no GPS row yet (common on mobile app reopen)."""
+    exclude_driver_ids = [str(x) for x in (exclude_driver_ids or [])]
+    located_ids = DriverLiveLocation.objects.values_list("driver_id", flat=True)
+    return list(
+        DriverProfile.objects.filter(is_online=True, is_deleted=False)
+        .exclude(id__in=exclude_driver_ids)
+        .exclude(id__in=_busy_driver_ids())
+        .exclude(id__in=located_ids)[:limit]
+    )
+
+
 def find_any_online_drivers(
     *,
     booking: Booking,
     exclude_driver_ids: list | None = None,
-) -> list[tuple[DriverLiveLocation, Any]]:
+) -> list[tuple[DriverProfile, Any]]:
     """
-    Notify online drivers regardless of distance (still requires a live location row).
-    Used only after normal rings are exhausted.
+    Nearest online drivers with live GPS, then online drivers without a GPS row yet.
+    Used after normal rings are exhausted.
     """
     exclude_driver_ids = [str(x) for x in (exclude_driver_ids or [])]
     pt = booking.pickup_location
     if pt is None:
         return []
+
+    results: list[tuple[DriverProfile, Any]] = []
     qs = (
         _base_live_qs(strict_kyc=False)
         .exclude(driver_id__in=exclude_driver_ids)
@@ -166,5 +197,15 @@ def find_any_online_drivers(
         .order_by("distance_m")
         .distinct()
     )
-    rows = list(qs[:FALLBACK_ANY_ONLINE_MAX])
-    return [(row, row.distance_m) for row in rows]
+    for row in qs[:FALLBACK_ANY_ONLINE_MAX]:
+        results.append((row.driver, row.distance_m))
+
+    if len(results) < FALLBACK_ANY_ONLINE_MAX:
+        remaining = FALLBACK_ANY_ONLINE_MAX - len(results)
+        for profile in find_online_profiles_without_live_location(
+            exclude_driver_ids=exclude_driver_ids + [str(d.id) for d, _ in results],
+            limit=remaining,
+        ):
+            results.append((profile, None))
+
+    return results

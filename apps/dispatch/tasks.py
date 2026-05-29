@@ -3,6 +3,7 @@ import logging
 from celery import shared_task
 
 from apps.bookings.models import Booking
+from apps.trip_events.models import TripEvent
 from apps.trip_events.services import broadcast_event, record_trip_event
 
 from .matching import iter_rings
@@ -42,6 +43,29 @@ def dispatch_booking(booking_id: str):
     from .services import assign_driver_to_booking
 
     assign_driver_to_booking(booking=booking)
+
+    if not TripEvent.objects.filter(booking=booking, event_type="ride_request_sent").exists():
+
+        def _retry_dispatch() -> None:
+            import time
+
+            time.sleep(5)
+            b = Booking.objects.filter(id=booking_id).first()
+            if not b or b.state != Booking.BookingState.SEARCHING_DRIVER or b.driver_id:
+                return
+            if TripEvent.objects.filter(booking=b, event_type="ride_request_sent").exists():
+                return
+            logger.info(
+                "dispatch_booking: retrying dispatch after no initial offers",
+                extra={"booking_id": booking_id},
+            )
+            from .services import assign_driver_to_booking as assign_again
+
+            assign_again(booking=b)
+
+        import threading
+
+        threading.Thread(target=_retry_dispatch, daemon=True).start()
 
 
 @shared_task

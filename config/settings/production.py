@@ -4,6 +4,17 @@ from .base import *  # noqa: F403,F401
 
 DEBUG = False
 
+# Railway healthchecks hit healthcheck.railway.app; app URLs use *.up.railway.app.
+_railway_hosts = (
+    "healthcheck.railway.app",
+    ".railway.app",
+    ".up.railway.app",
+)
+if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PUBLIC_DOMAIN"):
+    for host in _railway_hosts:
+        if host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(host)
+
 _cors_origins = [
     origin.strip()
     for origin in (os.getenv("CORS_ALLOWED_ORIGINS") or "").split(",")

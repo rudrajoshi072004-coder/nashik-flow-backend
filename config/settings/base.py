@@ -12,7 +12,17 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-dev-key-change-this-to-32-pl
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 # Empty DJANGO_ALLOWED_HOSTS in .env becomes "" — getenv returns "" and ".split" yields [""], which rejects every host.
 _allowed = (os.getenv("DJANGO_ALLOWED_HOSTS") or "*").strip()
-ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()]
+
+
+def _normalize_allowed_host_entry(host: str) -> str:
+    host = host.strip()
+    # Django uses ".example.com" for subdomains, not "*.example.com".
+    if host.startswith("*."):
+        return host[1:]
+    return host
+
+
+ALLOWED_HOSTS = [_normalize_allowed_host_entry(h) for h in _allowed.split(",") if h.strip()]
 if not ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["*"]
 

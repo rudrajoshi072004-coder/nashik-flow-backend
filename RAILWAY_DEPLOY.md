@@ -59,7 +59,7 @@ See `.env.railway.example`. Minimum:
 - `DJANGO_SETTINGS_MODULE=config.settings.production`
 - `DJANGO_SECRET_KEY`
 - `DJANGO_DEBUG=false`
-- `DJANGO_ALLOWED_HOSTS=*.up.railway.app`
+- `DJANGO_ALLOWED_HOSTS=.up.railway.app,healthcheck.railway.app` (or leave unset — production settings add Railway hosts)
 
 ## Deploy
 

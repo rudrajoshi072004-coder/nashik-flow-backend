@@ -91,6 +91,10 @@ class DriverViewSet(viewsets.ViewSet):
         going_online = serializer.validated_data["is_online"]
         profile.is_online = going_online
         profile.save(update_fields=["is_online", "updated_at"])
+        if not going_online:
+            from apps.tracking.redis_geo import remove_driver_geo
+
+            remove_driver_geo(str(profile.id))
         if going_online:
             data = serializer.validated_data
             lat = data.get("lat")
@@ -124,3 +128,17 @@ class DriverViewSet(viewsets.ViewSet):
             return self._missing_profile_response()
         count = Booking.objects.filter(state=Booking.BookingState.SEARCHING_DRIVER, is_deleted=False).count()
         return success_response({"driver_online": profile.is_online, "searching_bookings_count": count})
+
+    @action(detail=False, methods=["post"], url_path="fcm-token")
+    def fcm_token(self, request):
+        token = request.data.get("fcm_token")
+        if not token:
+            return success_response(
+                {"detail": "fcm_token required"},
+                message="Bad request",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        user.fcm_token = str(token)
+        user.save(update_fields=["fcm_token", "updated_at"])
+        return success_response({"status": "ok"}, message="FCM token saved")

@@ -23,6 +23,7 @@ from django.db.models import Q, QuerySet
 from apps.bookings.models import Booking
 from apps.drivers.models import DriverProfile
 from apps.tracking.models import DriverLiveLocation
+from apps.tracking.redis_geo import georadius_active_drivers, redis_enabled
 from apps.vehicles.models import Vehicle
 
 # (inner_km, outer_km)
@@ -112,6 +113,36 @@ def _base_live_qs(*, strict_kyc: bool = True) -> QuerySet[DriverLiveLocation]:
     )
 
 
+def _eligible_profiles_from_redis_ids(
+    *,
+    booking: Booking,
+    driver_distances: list[tuple[str, float]],
+    strict_kyc: bool,
+    strict_category: bool,
+    require_active_vehicle: bool,
+) -> list[tuple[DriverProfile, Any]]:
+    if not driver_distances:
+        return []
+    ids = [d[0] for d in driver_distances]
+    dist_map = {d[0]: dist for d in driver_distances}
+    q = DriverProfile.objects.filter(id__in=ids, is_online=True, is_deleted=False).filter(_not_on_active_trip())
+    if strict_kyc:
+        q = q.filter(kyc_status=DriverProfile.KYCStatus.APPROVED)
+    if strict_category:
+        q = q.filter(vehicles__category=booking.vehicle_category)
+    if require_active_vehicle:
+        q = q.filter(vehicles__status=Vehicle.Status.ACTIVE)
+    profiles = {str(p.id): p for p in q.distinct()}
+    rows: list[tuple[DriverProfile, Any]] = []
+    for did, dist_km in driver_distances:
+        profile = profiles.get(str(did))
+        if profile:
+            rows.append((profile, dist_km * 1000.0))
+        if len(rows) >= MAX_OFFER_BATCH:
+            break
+    return rows
+
+
 def find_drivers_in_ring(
     *,
     booking: Booking,
@@ -126,6 +157,30 @@ def find_drivers_in_ring(
     inner, outer = ring.inner_km, ring.outer_km
     pt = booking.pickup_location
     assert pt is not None
+
+    if redis_enabled():
+        redis_rows = georadius_active_drivers(
+            float(pt.y),
+            float(pt.x),
+            outer,
+            exclude_driver_ids=exclude_driver_ids,
+            count=50,
+        )
+        if inner > 0:
+            redis_rows = [(did, dist) for did, dist in redis_rows if dist > inner]
+        for strict_kyc, strict_category, require_active_vehicle in (
+            (True, True, True),
+            (False, False, False),
+        ):
+            profiles = _eligible_profiles_from_redis_ids(
+                booking=booking,
+                driver_distances=redis_rows,
+                strict_kyc=strict_kyc,
+                strict_category=strict_category,
+                require_active_vehicle=require_active_vehicle,
+            )
+            if profiles:
+                return [(DriverLiveLocation(driver=p), dist) for p, dist in profiles]
 
     def build_qs(*, strict_kyc: bool, strict_category: bool, require_active_vehicle: bool = True) -> QuerySet[DriverLiveLocation]:
         q = _base_live_qs(strict_kyc=strict_kyc).exclude(driver_id__in=exclude_driver_ids).annotate(
@@ -218,6 +273,24 @@ def find_any_online_drivers(
     pt = booking.pickup_location
     if pt is None:
         return []
+
+    if redis_enabled():
+        redis_rows = georadius_active_drivers(
+            float(pt.y),
+            float(pt.x),
+            100.0,
+            exclude_driver_ids=exclude_driver_ids,
+            count=FALLBACK_ANY_ONLINE_MAX,
+        )
+        profiles = _eligible_profiles_from_redis_ids(
+            booking=booking,
+            driver_distances=redis_rows,
+            strict_kyc=False,
+            strict_category=False,
+            require_active_vehicle=False,
+        )
+        if profiles:
+            return profiles
 
     results: list[tuple[DriverProfile, Any]] = []
     qs = (

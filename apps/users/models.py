@@ -29,6 +29,7 @@ class User(TimeStampedUUIDModel, SoftDeleteModel, AbstractUser):
     )
     city = models.CharField(max_length=64, default="Nashik", db_index=True)
     is_phone_verified = models.BooleanField(default=False)
+    fcm_token = models.CharField(max_length=512, blank=True, null=True)
 
     REQUIRED_FIELDS = []
     EMAIL_FIELD = "email"

@@ -122,6 +122,35 @@ def wait_after_offer_round(booking_id: str, round_id: str, completed_ring_index:
 
 
 @shared_task
+def send_fcm_offer_fallback(booking_id: str, driver_id: str, offer_payload: dict):
+    from apps.dispatch.offer_delivery import get_offer_ack_status
+    from apps.drivers.models import DriverProfile
+    from apps.notifications.fcm import send_fcm_push
+
+    status = get_offer_ack_status(booking_id, driver_id)
+    if status == "acked" or status is None:
+        return
+
+    profile = DriverProfile.objects.select_related("user").filter(id=driver_id).first()
+    if not profile:
+        return
+    token = getattr(profile.user, "fcm_token", None)
+    if not token:
+        return
+
+    send_fcm_push(
+        token=token,
+        title="New delivery request",
+        body=f"Pickup: {offer_payload.get('pickup_address_text', '')}",
+        data={
+            "type": "driver_offer",
+            "booking_id": str(booking_id),
+            **{k: str(v) for k, v in offer_payload.items() if v is not None},
+        },
+    )
+
+
+@shared_task
 def handle_assignment_timeout(booking_id: str, driver_id: str):
     booking = Booking.objects.filter(id=booking_id).select_related("driver").first()
     if not booking:

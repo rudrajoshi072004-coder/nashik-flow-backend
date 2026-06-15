@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from apps.bookings.models import Booking
 from apps.trip_events.services import broadcast_event, record_trip_event
+from apps.tracking.redis_geo import write_driver_geo
 from .models import DriverLiveLocation
 
 
@@ -54,6 +55,17 @@ def update_driver_location(
             "source_timestamp": timezone.now(),
         },
     )
+
+    write_driver_geo(
+        driver_id=str(driver_profile.id),
+        lat=float(lat),
+        lng=float(lng),
+        heading=float(heading),
+        speed_kmph=float(speed_kmph),
+        accuracy_m=float(accuracy_m),
+        booking_id=str(booking.id) if booking else None,
+    )
+
     cache.set(throttle_key, "1", timeout=LOCATION_THROTTLE_SECONDS)
 
     payload = {

@@ -403,6 +403,13 @@ if not USE_REDIS:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
 
+# Redis GEO dispatch + guaranteed offer delivery
+DISPATCH_RADIUS_KM = float(os.getenv("DISPATCH_RADIUS_KM", "10"))
+DRIVER_LOCATION_TTL_SECONDS = int(os.getenv("DRIVER_LOCATION_TTL_SECONDS", "45"))
+OFFER_WINDOW_SECONDS = int(os.getenv("OFFER_WINDOW_SECONDS", "30"))
+OFFER_ACK_WAIT_SECONDS = int(os.getenv("OFFER_ACK_WAIT_SECONDS", "4"))
+FIREBASE_SERVICE_ACCOUNT_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "").strip()
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOGGING = {
     "version": 1,

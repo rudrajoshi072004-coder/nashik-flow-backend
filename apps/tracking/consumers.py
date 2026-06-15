@@ -58,6 +58,19 @@ class RealtimeConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({"event": "subscribed", "payload": {"booking_id": booking_id}})
             return
 
+        if event == "ping":
+            await self.send_json({"event": "pong", "payload": {}})
+            return
+
+        if event == "driver_offer_ack" and self.user.role in {"driver", "fleet_driver"}:
+            booking_id = payload.get("booking_id")
+            profile = await sync_to_async(lambda: DriverProfile.objects.filter(user=self.user).first())()
+            if booking_id and profile:
+                from apps.dispatch.offer_delivery import record_driver_ack
+
+                await sync_to_async(record_driver_ack)(str(booking_id), str(profile.id))
+            return
+
         if event == "driver_location_update" and self.user.role in {"driver", "fleet_driver"}:
             profile = await sync_to_async(lambda: DriverProfile.objects.filter(user=self.user).first())()
             if not profile:

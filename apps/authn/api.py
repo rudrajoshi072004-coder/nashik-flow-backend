@@ -82,6 +82,19 @@ class JWTRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code != status.HTTP_200_OK:
+            return response
+        access = response.data.get("access") if isinstance(response.data, dict) else None
+        if not access:
+            return response
+        payload = {"access": access}
+        refresh = response.data.get("refresh") if isinstance(response.data, dict) else None
+        if refresh:
+            payload["refresh"] = refresh
+        return Response(payload, status=status.HTTP_200_OK)
+
 
 class PasswordLoginView(APIView):
     permission_classes = [AllowAny]

@@ -64,6 +64,7 @@ class OTPVerifyView(APIView):
             payload = verify_otp_and_issue_tokens(
                 serializer.validated_data["phone"],
                 serializer.validated_data["otp"],
+                role=serializer.validated_data.get("role", "customer"),
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

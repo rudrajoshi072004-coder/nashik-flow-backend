@@ -14,6 +14,7 @@ class OTPRequestSerializer(serializers.Serializer):
 class OTPVerifySerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
     otp = serializers.CharField(max_length=6, min_length=6)
+    role = serializers.ChoiceField(choices=["customer", "driver"], required=False, default="customer")
 
     def validate_phone(self, value: str) -> str:
         return (value or "").strip()

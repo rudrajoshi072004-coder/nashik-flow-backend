@@ -356,6 +356,10 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
+# When set (e.g. 123456), OTP login uses this fixed code and skips cache lookup on verify.
+# Needed on multi-worker Railway when Redis is unavailable — locmem cache is not shared.
+OTP_DEV_BYPASS = os.getenv("OTP_DEV_BYPASS", "").strip()
+
 REDIS_URL = (
     os.getenv("REDIS_URL")
     or os.getenv("REDIS_PRIVATE_URL")

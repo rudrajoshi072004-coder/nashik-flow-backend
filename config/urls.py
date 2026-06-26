@@ -6,6 +6,7 @@ from rest_framework.routers import DefaultRouter
 from apps.admin_ops.api import AdminAuditLogViewSet, AdminOpsViewSet
 from apps.bookings.api import BookingViewSet
 from apps.common.api.health import HealthCheckView
+from apps.common.api.routing import DrivingRouteView
 from apps.customers.api import CustomerViewSet
 from apps.dispatch.api import DispatchViewSet
 from apps.drivers.api import DriverViewSet
@@ -48,5 +49,6 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/v1/auth/", include("apps.authn.urls")),
     path("api/v1/health", HealthCheckView.as_view(), name="health-check"),
+    path("api/v1/routing/driving-route/", DrivingRouteView.as_view(), name="driving-route"),
     path("api/v1/", include(router.urls)),
 ]

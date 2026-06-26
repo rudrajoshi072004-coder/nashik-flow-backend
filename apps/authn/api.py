@@ -6,7 +6,13 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .serializers import OTPRequestSerializer, OTPVerifySerializer, PasswordLoginSerializer
+from .firebase_auth import FirebaseAuthError, issue_tokens_for_firebase
+from .serializers import (
+    FirebaseLoginSerializer,
+    OTPRequestSerializer,
+    OTPVerifySerializer,
+    PasswordLoginSerializer,
+)
 from .services import request_otp, verify_otp_and_issue_tokens
 
 
@@ -119,6 +125,41 @@ class PasswordLoginView(APIView):
                 "user": {
                     "id": str(user.id),
                     "phone": user.phone,
+                    "role": user.role,
+                    "city": user.city,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class FirebaseLoginView(APIView):
+    """Exchange a Firebase ID token (phone OTP / email / Google) for our JWT."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        serializer = FirebaseLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            payload = issue_tokens_for_firebase(
+                serializer.validated_data["id_token"],
+                role=serializer.validated_data.get("role", "customer"),
+                city=serializer.validated_data.get("city", "Nashik"),
+            )
+        except FirebaseAuthError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
+
+        user = payload["user"]
+        return Response(
+            {
+                "access": payload["access"],
+                "refresh": payload["refresh"],
+                "user": {
+                    "id": str(user.id),
+                    "phone": user.phone,
+                    "email": user.email,
                     "role": user.role,
                     "city": user.city,
                 },

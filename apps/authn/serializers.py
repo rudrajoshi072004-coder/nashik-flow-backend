@@ -30,6 +30,18 @@ class PasswordLoginSerializer(serializers.Serializer):
         return value
 
 
+class FirebaseLoginSerializer(serializers.Serializer):
+    id_token = serializers.CharField(trim_whitespace=True)
+    role = serializers.ChoiceField(choices=["customer", "driver"], required=False, default="customer")
+    city = serializers.CharField(max_length=64, required=False, default="Nashik")
+
+    def validate_id_token(self, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("This field may not be blank.")
+        return value
+
+
 class AuthUserSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     phone = serializers.CharField()

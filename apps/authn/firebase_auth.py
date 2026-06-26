@@ -15,6 +15,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 # Reuse the firebase-admin app already initialised for FCM push.
 from apps.notifications.fcm import _get_firebase_app
+from .phone_utils import find_user_by_phone, normalize_phone_e164
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,9 @@ def find_or_create_user_for_firebase(decoded: dict, role: str = "customer", city
 
     role = role if role in ALLOWED_ROLES else "customer"
     uid = decoded.get("uid") or decoded.get("user_id") or ""
-    phone = (decoded.get("phone_number") or "").strip() or None
+    phone = normalize_phone_e164((decoded.get("phone_number") or "").strip()) or None
+    if phone == "":
+        phone = None
     email = (decoded.get("email") or "").strip().lower() or None
     name = (decoded.get("name") or "").strip()
 
@@ -67,7 +70,7 @@ def find_or_create_user_for_firebase(decoded: dict, role: str = "customer", city
 
     # 1) Prefer matching by phone (our primary identifier).
     if phone:
-        user = user_model.objects.filter(phone=phone).first()
+        user, _ = find_user_by_phone(user_model, phone)
 
     # 2) Fall back to email (used by email/password + Google sign-in).
     if user is None and email:
@@ -85,6 +88,9 @@ def find_or_create_user_for_firebase(decoded: dict, role: str = "customer", city
         )
     else:
         changed = []
+        if role == user_model.Role.DRIVER and user.role != user_model.Role.DRIVER:
+            user.role = user_model.Role.DRIVER
+            changed.append("role")
         if email and not user.email:
             user.email = email
             changed.append("email")
@@ -98,6 +104,11 @@ def find_or_create_user_for_firebase(decoded: dict, role: str = "customer", city
             changed.append("is_phone_verified")
         if changed:
             user.save(update_fields=list(set(changed)))
+
+    if role == user_model.Role.DRIVER:
+        from apps.drivers.models import DriverProfile
+
+        DriverProfile.objects.get_or_create(user=user)
 
     if name and not (user.first_name or user.last_name):
         first, _, last = name.partition(" ")

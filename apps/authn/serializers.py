@@ -1,11 +1,13 @@
 from rest_framework import serializers
 
+from .phone_utils import normalize_phone_e164
+
 
 class OTPRequestSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
 
     def validate_phone(self, value: str) -> str:
-        value = (value or "").strip()
+        value = normalize_phone_e164(value)
         if not value:
             raise serializers.ValidationError("This field may not be blank.")
         return value
@@ -17,7 +19,10 @@ class OTPVerifySerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=["customer", "driver"], required=False, default="customer")
 
     def validate_phone(self, value: str) -> str:
-        return (value or "").strip()
+        value = normalize_phone_e164(value)
+        if not value:
+            raise serializers.ValidationError("This field may not be blank.")
+        return value
 
 
 class PasswordLoginSerializer(serializers.Serializer):
@@ -25,7 +30,7 @@ class PasswordLoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, trim_whitespace=False)
 
     def validate_phone(self, value: str) -> str:
-        value = (value or "").strip()
+        value = normalize_phone_e164(value)
         if not value:
             raise serializers.ValidationError("This field may not be blank.")
         return value

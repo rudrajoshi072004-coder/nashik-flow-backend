@@ -7,6 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from .firebase_auth import FirebaseAuthError, issue_tokens_for_firebase
+from .phone_utils import find_user_by_phone
 from .serializers import (
     FirebaseLoginSerializer,
     OTPRequestSerializer,
@@ -113,6 +114,12 @@ class PasswordLoginView(APIView):
         phone = serializer.validated_data["phone"]
         password = serializer.validated_data["password"]
         user = authenticate(request, username=phone, password=password)
+        if user is None:
+            from django.contrib.auth import get_user_model
+
+            existing, _ = find_user_by_phone(get_user_model(), phone)
+            if existing:
+                user = authenticate(request, username=existing.phone, password=password)
         if user is None:
             return Response({"detail": "Invalid phone or password."}, status=status.HTTP_400_BAD_REQUEST)
         if not user.is_active:

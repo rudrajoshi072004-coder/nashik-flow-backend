@@ -1,5 +1,6 @@
-from django.db import connection
+from django.conf import settings
 from django.core.cache import cache
+from django.db import connection
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
@@ -30,6 +31,9 @@ class HealthCheckView(APIView):
             return False
 
     def _check_redis(self):
+        # Redis is optional on Railway; locmem cache is valid when USE_REDIS is false.
+        if not getattr(settings, "USE_REDIS", False):
+            return True
         try:
             cache.set("health:ping", "pong", timeout=10)
             return cache.get("health:ping") == "pong"

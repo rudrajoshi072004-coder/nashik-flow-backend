@@ -10,6 +10,7 @@ django_asgi_app = get_asgi_application()
 
 # Import websocket routing only after Django app registry is initialized.
 from apps.ride_socket_demo.socket_server import sio  # noqa: E402
+from config.asgi_lifespan import LifespanMiddleware  # noqa: E402
 from config.routing import websocket_urlpatterns  # noqa: E402
 from config.socket_auth import JWTAuthMiddlewareStack  # noqa: E402
 
@@ -21,4 +22,5 @@ _inner = ProtocolTypeRouter(
 )
 
 # Socket.IO at /socket.io/*; everything else (HTTP + Channels WS) uses `_inner`.
-application = ASGIApp(sio, _inner)
+# LifespanMiddleware avoids "ASGI lifespan protocol appears unsupported" under Uvicorn/Gunicorn.
+application = LifespanMiddleware(ASGIApp(sio, _inner))

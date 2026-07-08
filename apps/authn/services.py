@@ -68,7 +68,7 @@ def verify_otp_and_issue_tokens(phone: str, otp: str, role: str = "customer") ->
     update_fields = ["is_phone_verified"]
     if hasattr(user, "updated_at"):
         update_fields.append("updated_at")
-    if role_value == user_model.Role.DRIVER and user.role != user_model.Role.DRIVER:
+    if role_value == user_model.Role.DRIVER:
         user.role = user_model.Role.DRIVER
         update_fields.append("role")
     user.save(update_fields=update_fields)

@@ -10,11 +10,18 @@ from apps.common.api.responses import success_response
 from apps.common.permissions.rbac import IsDriverRole
 from apps.users.models import User
 from .models import DriverProfile
+from .onboarding_serializers import DriverOnboardingSubmitSerializer
+from .onboarding_service import submit_driver_onboarding
 from .serializers import DriverAvailabilitySerializer, DriverLocationSerializer, DriverProfileSerializer
 
 
 class DriverViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsDriverRole]
+
+    def get_permissions(self):
+        if self.action == "submit_onboarding":
+            return [IsAuthenticated()]
+        return super().get_permissions()
 
     def get_object(self):
         """Resolve or lazily create the driver's profile.
@@ -42,6 +49,17 @@ class DriverViewSet(viewsets.ViewSet):
         if not profile:
             return self._missing_profile_response()
         return success_response(DriverProfileSerializer(profile).data)
+
+    @action(detail=False, methods=["post"], url_path="onboarding")
+    def submit_onboarding(self, request):
+        serializer = DriverOnboardingSubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = submit_driver_onboarding(request.user, serializer.validated_data)
+        return success_response(
+            DriverProfileSerializer(profile).data,
+            message="Driver onboarding submitted",
+            status_code=status.HTTP_201_CREATED,
+        )
 
     @action(detail=False, methods=["patch"], url_path="profile")
     def update_profile(self, request):

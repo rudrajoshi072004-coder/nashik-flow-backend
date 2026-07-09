@@ -14,6 +14,11 @@ from apps.users.serializers import UserSerializer
 class CustomerViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsCustomerRole]
 
+    def get_permissions(self):
+        if getattr(self, "action", None) == "bookings":
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
     def list(self, request):
         return success_response(UserSerializer(request.user).data)
 

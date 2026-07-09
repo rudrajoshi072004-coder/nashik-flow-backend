@@ -41,7 +41,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         if action in {"fare_estimate"}:
             return [AllowAny()]
         if action in {"create"}:
-            return [IsCustomerOrAdmin()]
+            # Drivers (and other roles) may book deliveries on the customer app with the same phone.
+            return [IsAuthenticated()]
         if action in {"list", "retrieve", "timeline"}:
             return [IsAuthenticated()]
         if action in {"state_transition"}:
@@ -58,10 +59,11 @@ class BookingViewSet(viewsets.ModelViewSet):
         role = getattr(user, "role", None)
         if role is None:
             return qs.none()
+        own_as_customer = qs.filter(customer=user, is_deleted=False)
         if role == "customer":
-            return qs.filter(customer=user, is_deleted=False)
+            return own_as_customer
         if role in {"driver", "fleet_driver"}:
-            return bookings_queryset_for_driver_user(user)
+            return (own_as_customer | bookings_queryset_for_driver_user(user)).distinct()
         return qs.filter(is_deleted=False)
 
     def perform_create(self, serializer):
@@ -122,9 +124,9 @@ class BookingViewSet(viewsets.ModelViewSet):
         booking = self.get_object()
         serializer = BookingTransitionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        role = request.user.role
         target_state = serializer.validated_data["to_state"]
-        if role == "customer" and target_state not in {Booking.BookingState.CANCELLED_BY_CUSTOMER}:
+        is_booking_customer = booking.customer_id == request.user.id
+        if is_booking_customer and target_state not in {Booking.BookingState.CANCELLED_BY_CUSTOMER}:
             return success_response(
                 {"detail": "Customers can only cancel their bookings."},
                 message="Forbidden",

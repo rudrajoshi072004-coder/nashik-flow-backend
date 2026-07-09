@@ -19,7 +19,7 @@ class DriverViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsDriverRole]
 
     def get_permissions(self):
-        if self.action == "submit_onboarding":
+        if self.action in {"submit_onboarding", "list", "update_profile"}:
             return [IsAuthenticated()]
         return super().get_permissions()
 

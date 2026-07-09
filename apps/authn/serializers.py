@@ -28,6 +28,7 @@ class OTPVerifySerializer(serializers.Serializer):
 class PasswordLoginSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
     password = serializers.CharField(write_only=True, trim_whitespace=False)
+    role = serializers.ChoiceField(choices=["customer", "driver"], required=False)
 
     def validate_phone(self, value: str) -> str:
         value = normalize_phone_e164(value)

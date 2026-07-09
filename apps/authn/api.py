@@ -125,6 +125,17 @@ class PasswordLoginView(APIView):
         if not user.is_active:
             return Response({"detail": "Account disabled."}, status=status.HTTP_403_FORBIDDEN)
 
+        requested_role = serializer.validated_data.get("role")
+        from django.contrib.auth import get_user_model
+
+        user_model = get_user_model()
+        if requested_role == user_model.Role.DRIVER and user.role != user_model.Role.DRIVER:
+            user.role = user_model.Role.DRIVER
+            user.save(update_fields=["role", "updated_at"])
+            from apps.drivers.models import DriverProfile
+
+            DriverProfile.objects.get_or_create(user=user)
+
         refresh = RefreshToken.for_user(user)
         return Response(
             {

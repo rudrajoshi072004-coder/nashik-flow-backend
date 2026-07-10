@@ -7,6 +7,7 @@ from apps.admin_ops.api import AdminAuditLogViewSet, AdminOpsViewSet
 from apps.bookings.api import BookingViewSet
 from apps.common.api.health import HealthCheckView
 from apps.common.api.routing import DrivingRouteView
+from apps.common.views.public_pages import DeleteAccountView
 from apps.customers.api import CustomerViewSet
 from apps.dispatch.api import DispatchViewSet
 from apps.drivers.api import DriverViewSet
@@ -43,6 +44,7 @@ router.register(r"admin/ops", AdminOpsViewSet, basename="admin-ops")
 router.register(r"admin/audit-logs", AdminAuditLogViewSet, basename="admin-audit-logs")
 
 urlpatterns = [
+    path("delete-account/", DeleteAccountView.as_view(), name="delete-account"),
     path("drivers", DriversListView.as_view(), name="ride-demo-drivers"),
     path("admin/", admin.site.urls),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

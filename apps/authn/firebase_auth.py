@@ -33,7 +33,8 @@ def verify_firebase_id_token(id_token: str) -> dict:
 
     if _get_firebase_app() is None:
         raise FirebaseAuthError(
-            "Firebase is not configured on the server (FIREBASE_SERVICE_ACCOUNT_PATH)."
+            "Firebase is not configured on the server. Set FIREBASE_SERVICE_ACCOUNT_PATH "
+            "or FIREBASE_SERVICE_ACCOUNT_JSON on Railway."
         )
 
     from firebase_admin import auth as fb_auth

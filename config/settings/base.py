@@ -414,6 +414,8 @@ DRIVER_LOCATION_TTL_SECONDS = int(os.getenv("DRIVER_LOCATION_TTL_SECONDS", "45")
 OFFER_WINDOW_SECONDS = int(os.getenv("OFFER_WINDOW_SECONDS", "30"))
 OFFER_ACK_WAIT_SECONDS = int(os.getenv("OFFER_ACK_WAIT_SECONDS", "4"))
 FIREBASE_SERVICE_ACCOUNT_PATH = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "").strip()
+# Railway-friendly: paste the service-account JSON as a single env var (no file mount).
+FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOGGING = {

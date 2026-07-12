@@ -4,6 +4,8 @@ from django.db import connection
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
+from apps.notifications.fcm import is_firebase_configured
+
 from .responses import success_response
 
 
@@ -17,7 +19,11 @@ class HealthCheckView(APIView):
         return success_response(
             data={
                 "status": status_text,
-                "services": {"database": db_ok, "redis": redis_ok},
+                "services": {
+                    "database": db_ok,
+                    "redis": redis_ok,
+                    "firebase": is_firebase_configured(),
+                },
                 "request_id": getattr(request, "request_id", None),
             }
         )

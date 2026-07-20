@@ -46,7 +46,7 @@ u.save()
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/admin/portal/overview/` | Dashboard KPIs |
-| GET | `/api/v1/admin/portal/drivers/` | Driver list |
+| GET | `/api/v1/admin/portal/drivers/` | Driver list with phone, vehicle, documents, wallet |
 | GET | `/api/v1/admin/portal/customers/` | Customer list |
 | GET/PATCH | `/api/v1/admin/portal/settings/` | Platform settings |
 | GET | `/api/v1/admin/portal/audit-logs/` | Audit trail |

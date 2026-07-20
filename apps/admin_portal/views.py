@@ -2,7 +2,7 @@
 from decimal import Decimal
 
 from django.apps import apps
-from django.db.models import Count, Sum
+from django.db.models import Count, Prefetch, Sum
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -34,6 +34,83 @@ ACTIVE_BOOKING_STATES = (
     Booking.BookingState.NEARING_DROP,
     Booking.BookingState.PAYMENT_PENDING,
 )
+
+
+def _doc_status_label(raw: str) -> str:
+    mapping = {
+        "approved": "Verified",
+        "pending": "Pending",
+        "rejected": "Rejected",
+    }
+    return mapping.get(str(raw).lower(), "Pending")
+
+
+def _serialize_driver_profile(profile) -> dict:
+    user = profile.user
+    account_phone = getattr(user, "phone", "") if user else ""
+    driver_phone = (profile.driver_phone or "").strip()
+    contact_phone = driver_phone or account_phone
+
+    wallet_balance = "0"
+    wallet = getattr(profile, "wallet", None)
+    if wallet is not None:
+        wallet_balance = str(getattr(wallet, "current_balance", 0) or 0)
+
+    documents = []
+    for doc in profile.documents.all():
+        if getattr(doc, "is_deleted", False):
+            continue
+        documents.append(
+            {
+                "type": doc.get_document_type_display() if hasattr(doc, "get_document_type_display") else doc.document_type,
+                "number": doc.file_key or "—",
+                "status": _doc_status_label(doc.status),
+                "expiry": "—",
+            }
+        )
+
+    vehicle_body = profile.vehicle_body_type or profile.three_wheeler_body_type or profile.truck_body_detail or ""
+
+    return {
+        "id": str(profile.pk),
+        "user_id": str(user.pk) if user else None,
+        "name": profile.driver_name or profile.owner_name or account_phone,
+        "owner_name": profile.owner_name or "",
+        "phone": contact_phone,
+        "account_phone": account_phone,
+        "driver_phone": driver_phone,
+        "email": getattr(user, "email", "") or "" if user else "",
+        "city": profile.operation_city or getattr(user, "city", "") if user else "",
+        "status": "online" if profile.is_online else "offline",
+        "kyc_status": profile.kyc_status,
+        "onboarding_completed": profile.onboarding_completed,
+        "vehicle_category": profile.vehicle_type or "",
+        "vehicle_type": profile.vehicle_type or "",
+        "vehicle_number": profile.vehicle_number or "",
+        "vehicle_body_type": vehicle_body,
+        "fuel_type": profile.fuel_type or "",
+        "will_drive_vehicle": profile.will_drive_vehicle,
+        "rating": str(profile.rating_avg or "0"),
+        "total_trips": profile.total_trips or 0,
+        "wallet_balance": wallet_balance,
+        "joined_at": user.date_joined.isoformat() if user and user.date_joined else None,
+        "documents": documents,
+        "vehicle_details": {
+            "make": profile.vehicle_type or "—",
+            "model": vehicle_body or "—",
+            "year": "—",
+            "color": "—",
+            "plate": profile.vehicle_number or "—",
+            "insurance": next(
+                (d["status"] for d in documents if "insurance" in d["type"].lower()),
+                "—",
+            ),
+            "fitness": next(
+                (d["status"] for d in documents if "rc" in d["type"].lower() or "registration" in d["type"].lower()),
+                "—",
+            ),
+        },
+    }
 
 
 class PortalOverviewView(APIView):
@@ -73,21 +150,21 @@ class PortalDriversView(APIView):
 
     def get(self, request):
         DriverProfile = apps.get_model("drivers", "DriverProfile")
-        rows = []
-        for profile in DriverProfile.objects.select_related("user").filter(is_deleted=False)[:200]:
-            user = profile.user
-            rows.append(
-                {
-                    "id": str(profile.pk),
-                    "user_id": str(user.pk) if user else None,
-                    "name": profile.driver_name or profile.owner_name or getattr(user, "phone", ""),
-                    "phone": getattr(user, "phone", ""),
-                    "city": profile.operation_city or getattr(user, "city", ""),
-                    "status": "online" if profile.is_online else "offline",
-                    "vehicle_category": profile.vehicle_type,
-                    "rating": str(profile.rating_avg or "0"),
-                }
+        DriverDocument = apps.get_model("driver_documents", "DriverDocument")
+
+        profiles = (
+            DriverProfile.objects.select_related("user", "wallet")
+            .prefetch_related(
+                Prefetch(
+                    "documents",
+                    queryset=DriverDocument.objects.filter(is_deleted=False),
+                )
             )
+            .filter(is_deleted=False)
+            .order_by("-updated_at")[:500]
+        )
+
+        rows = [_serialize_driver_profile(profile) for profile in profiles]
         return _ok({"count": len(rows), "results": rows})
 
 

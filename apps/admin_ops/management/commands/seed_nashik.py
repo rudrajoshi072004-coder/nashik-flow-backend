@@ -23,7 +23,7 @@ class Command(BaseCommand):
 
     def _seed_admins(self):
         user_model = get_user_model()
-        user_model.objects.get_or_create(
+        u, _ = user_model.objects.get_or_create(
             phone="+919100000001",
             defaults={
                 "role": user_model.Role.SUPER_ADMIN,
@@ -32,21 +32,28 @@ class Command(BaseCommand):
                 "city": "Nashik",
             },
         )
+        u.set_password("Tran@123")
+        u.save(update_fields=["password"])
 
     def _seed_demo_customer(self):
-        """Dev/demo customer for password login on mobile (see customer app login screen)."""
+        """Primary demo account for customer app + admin portal."""
         user_model = get_user_model()
-        u, _ = user_model.objects.update_or_create(
+        u, _ = user_model.objects.get_or_create(
             phone="+919175504996",
             defaults={
-                "role": user_model.Role.CUSTOMER,
+                "role": user_model.Role.SUPER_ADMIN,
+                "is_staff": True,
                 "is_active": True,
                 "is_phone_verified": True,
                 "city": "Nashik",
+                "first_name": "Rudra",
             },
         )
+        if u.role == user_model.Role.CUSTOMER:
+            u.role = user_model.Role.SUPER_ADMIN
+            u.is_staff = True
         u.set_password("Tran@123")
-        u.save(update_fields=["password"])
+        u.save(update_fields=["role", "is_staff", "password", "updated_at"])
 
     def _seed_vehicle_categories(self):
         rows = [

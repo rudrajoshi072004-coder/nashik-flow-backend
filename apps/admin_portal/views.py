@@ -1,4 +1,5 @@
 """Additive admin portal API — mount at /api/v1/admin/portal/ without changing existing routes."""
+import re
 from decimal import Decimal
 
 from django.apps import apps
@@ -10,6 +11,18 @@ from rest_framework.views import APIView
 from apps.admin_portal.permissions import IsPortalAdmin
 from apps.bookings.models import Booking
 from apps.drivers.profile_service import ensure_driver_profile
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+_VEHICLE_TYPE_LABELS = {
+    "2w": "2-wheeler",
+    "3w": "3-wheeler",
+    "truck": "Truck",
+    "part_load": "Part load",
+}
 
 
 def _ok(data, message="OK"):
@@ -56,14 +69,90 @@ def _registration_status(profile) -> str:
     return "kyc_pending"
 
 
-def _serialize_driver_profile(profile) -> dict:
+def _looks_like_uuid(value: str) -> bool:
+    return bool(value and _UUID_RE.match(str(value).strip()))
+
+
+def _looks_like_phone(value: str) -> bool:
+    if not value or _looks_like_uuid(value):
+        return False
+    digits = re.sub(r"\D", "", str(value))
+    return 10 <= len(digits) <= 15
+
+
+def _format_phone_display(value: str) -> str:
+    if not _looks_like_phone(value):
+        return ""
+    digits = re.sub(r"\D", "", str(value))
+    if len(digits) == 10:
+        return f"+91{digits}"
+    if len(digits) == 12 and digits.startswith("91"):
+        return f"+{digits}"
+    if value.startswith("+"):
+        return value
+    return f"+{digits}"
+
+
+def _clean_text(value: str) -> str:
+    text = (value or "").strip()
+    if not text or _looks_like_uuid(text):
+        return ""
+    return text
+
+
+def _resolve_display_name(profile, user, account_phone: str, driver_phone: str, user_name: str) -> str:
+    for candidate in (profile.driver_name, profile.owner_name, user_name):
+        cleaned = _clean_text(candidate)
+        if cleaned:
+            return cleaned
+
+    for candidate in (driver_phone, account_phone):
+        formatted = _format_phone_display(candidate)
+        if formatted:
+            return formatted
+
+    return f"Driver {str(profile.pk)[-6:].upper()}"
+
+
+def _resolve_contact_phone(account_phone: str, driver_phone: str) -> str:
+    for candidate in (driver_phone, account_phone):
+        formatted = _format_phone_display(candidate)
+        if formatted:
+            return formatted
+    return ""
+
+
+def _resolve_vehicle_type_label(raw: str, category_names: dict[str, str]) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if _looks_like_uuid(value):
+        return category_names.get(value.lower(), "")
+    return _VEHICLE_TYPE_LABELS.get(value.lower(), value.replace("_", " ").title())
+
+
+def _active_vehicle(profile):
+    vehicles = getattr(profile, "vehicles", None)
+    if vehicles is None:
+        return None
+    for vehicle in vehicles.all():
+        if getattr(vehicle, "is_deleted", False):
+            continue
+        return vehicle
+    return None
+
+
+def _serialize_driver_profile(profile, category_names: dict[str, str] | None = None) -> dict:
+    category_names = category_names or {}
     user = profile.user
     account_phone = getattr(user, "phone", "") if user else ""
     driver_phone = (profile.driver_phone or "").strip()
-    contact_phone = driver_phone or account_phone
     user_name = ""
     if user:
         user_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+
+    display_name = _resolve_display_name(profile, user, account_phone, driver_phone, user_name)
+    contact_phone = _resolve_contact_phone(account_phone, driver_phone)
 
     wallet_balance = "0"
     wallet = getattr(profile, "wallet", None)
@@ -84,15 +173,28 @@ def _serialize_driver_profile(profile) -> dict:
         )
 
     vehicle_body = profile.vehicle_body_type or profile.three_wheeler_body_type or profile.truck_body_detail or ""
+    vehicle = _active_vehicle(profile)
+    vehicle_number = _clean_text(profile.vehicle_number) or (
+        getattr(vehicle, "registration_number", "") if vehicle else ""
+    )
+    vehicle_type_raw = profile.vehicle_type or ""
+    vehicle_type_label = _resolve_vehicle_type_label(vehicle_type_raw, category_names)
+    if not vehicle_type_label and vehicle and getattr(vehicle, "category_id", None):
+        category = getattr(vehicle, "category", None)
+        if category is not None:
+            vehicle_type_label = category.name
+
+    profile_id = str(profile.pk)
 
     return {
-        "id": str(profile.pk),
+        "id": profile_id,
+        "display_id": f"DRV-{profile_id[-6:].upper()}",
         "user_id": str(user.pk) if user else None,
-        "name": profile.driver_name or profile.owner_name or user_name or account_phone,
-        "owner_name": profile.owner_name or "",
+        "name": display_name,
+        "owner_name": _clean_text(profile.owner_name),
         "phone": contact_phone,
-        "account_phone": account_phone,
-        "driver_phone": driver_phone,
+        "account_phone": _format_phone_display(account_phone) or "",
+        "driver_phone": _format_phone_display(driver_phone) or "",
         "email": getattr(user, "email", "") or "" if user else "",
         "city": profile.operation_city or getattr(user, "city", "") if user else "",
         "status": "online" if profile.is_online else "offline",
@@ -100,9 +202,9 @@ def _serialize_driver_profile(profile) -> dict:
         "onboarding_completed": profile.onboarding_completed,
         "registration_status": _registration_status(profile),
         "registered_at": profile.created_at.isoformat() if profile.created_at else None,
-        "vehicle_category": profile.vehicle_type or "",
-        "vehicle_type": profile.vehicle_type or "",
-        "vehicle_number": profile.vehicle_number or "",
+        "vehicle_category": vehicle_type_label or "",
+        "vehicle_type": vehicle_type_label or "",
+        "vehicle_number": vehicle_number,
         "vehicle_body_type": vehicle_body,
         "fuel_type": profile.fuel_type or "",
         "will_drive_vehicle": profile.will_drive_vehicle,
@@ -112,11 +214,11 @@ def _serialize_driver_profile(profile) -> dict:
         "joined_at": user.date_joined.isoformat() if user and user.date_joined else None,
         "documents": documents,
         "vehicle_details": {
-            "make": profile.vehicle_type or "—",
+            "make": vehicle_type_label or "—",
             "model": vehicle_body or "—",
-            "year": "—",
+            "year": str(getattr(vehicle, "manufacture_year", "") or "—") if vehicle else "—",
             "color": "—",
-            "plate": profile.vehicle_number or "—",
+            "plate": vehicle_number or "—",
             "insurance": next(
                 (d["status"] for d in documents if "insurance" in d["type"].lower()),
                 "—",
@@ -195,13 +297,31 @@ class PortalDriversView(APIView):
                 Prefetch(
                     "documents",
                     queryset=DriverDocument.objects.filter(is_deleted=False),
-                )
+                ),
+                Prefetch(
+                    "vehicles",
+                    queryset=apps.get_model("vehicles", "Vehicle").objects.filter(is_deleted=False).select_related(
+                        "category"
+                    ),
+                ),
             )
             .filter(pk__in=profile_ids, is_deleted=False)
             .order_by("-created_at")
         )
 
-        rows = [_serialize_driver_profile(profile) for profile in profiles]
+        VehicleCategory = apps.get_model("vehicle_categories", "VehicleCategory")
+        category_ids: set[str] = set()
+        for profile in profiles:
+            raw_type = (profile.vehicle_type or "").strip()
+            if _looks_like_uuid(raw_type):
+                category_ids.add(raw_type.lower())
+
+        category_names = {
+            str(category.pk).lower(): category.name
+            for category in VehicleCategory.objects.filter(pk__in=category_ids, is_deleted=False)
+        }
+
+        rows = [_serialize_driver_profile(profile, category_names) for profile in profiles]
         return _ok({"count": len(rows), "results": rows})
 
 

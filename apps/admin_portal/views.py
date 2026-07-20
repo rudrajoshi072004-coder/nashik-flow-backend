@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 
 from apps.admin_portal.permissions import IsPortalAdmin
 from apps.bookings.models import Booking
+from apps.drivers.profile_service import ensure_driver_profile
 
 
 def _ok(data, message="OK"):
@@ -45,11 +46,24 @@ def _doc_status_label(raw: str) -> str:
     return mapping.get(str(raw).lower(), "Pending")
 
 
+def _registration_status(profile) -> str:
+    if not profile.onboarding_completed:
+        return "new"
+    if profile.kyc_status == "approved":
+        return "approved"
+    if profile.kyc_status == "rejected":
+        return "rejected"
+    return "kyc_pending"
+
+
 def _serialize_driver_profile(profile) -> dict:
     user = profile.user
     account_phone = getattr(user, "phone", "") if user else ""
     driver_phone = (profile.driver_phone or "").strip()
     contact_phone = driver_phone or account_phone
+    user_name = ""
+    if user:
+        user_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
 
     wallet_balance = "0"
     wallet = getattr(profile, "wallet", None)
@@ -74,7 +88,7 @@ def _serialize_driver_profile(profile) -> dict:
     return {
         "id": str(profile.pk),
         "user_id": str(user.pk) if user else None,
-        "name": profile.driver_name or profile.owner_name or account_phone,
+        "name": profile.driver_name or profile.owner_name or user_name or account_phone,
         "owner_name": profile.owner_name or "",
         "phone": contact_phone,
         "account_phone": account_phone,
@@ -84,6 +98,8 @@ def _serialize_driver_profile(profile) -> dict:
         "status": "online" if profile.is_online else "offline",
         "kyc_status": profile.kyc_status,
         "onboarding_completed": profile.onboarding_completed,
+        "registration_status": _registration_status(profile),
+        "registered_at": profile.created_at.isoformat() if profile.created_at else None,
         "vehicle_category": profile.vehicle_type or "",
         "vehicle_type": profile.vehicle_type or "",
         "vehicle_number": profile.vehicle_number or "",
@@ -140,7 +156,10 @@ class PortalOverviewView(APIView):
             "estimated_revenue": str(revenue),
             "vehicle_types_active": VehicleCategory.objects.filter(active=True, is_deleted=False).count(),
             "total_customers": User.objects.filter(role=User.Role.CUSTOMER, is_deleted=False).count(),
-            "total_drivers": User.objects.filter(role=User.Role.DRIVER, is_deleted=False).count(),
+            "total_drivers": User.objects.filter(
+                role__in=[User.Role.DRIVER, User.Role.FLEET_DRIVER],
+                is_deleted=False,
+            ).count(),
         }
         return _ok(data)
 
@@ -149,8 +168,26 @@ class PortalDriversView(APIView):
     permission_classes = [IsPortalAdmin]
 
     def get(self, request):
+        User = apps.get_model("users", "User")
         DriverProfile = apps.get_model("drivers", "DriverProfile")
         DriverDocument = apps.get_model("driver_documents", "DriverDocument")
+
+        driver_users = (
+            User.objects.filter(
+                role__in=[User.Role.DRIVER, User.Role.FLEET_DRIVER],
+                is_deleted=False,
+            )
+            .select_related("driver_profile", "driver_profile__wallet")
+            .order_by("-date_joined")[:500]
+        )
+
+        profile_ids: list = []
+        for user in driver_users:
+            profile = getattr(user, "driver_profile", None)
+            if profile is None or profile.is_deleted:
+                profile = ensure_driver_profile(user)
+            if profile and not profile.is_deleted:
+                profile_ids.append(profile.pk)
 
         profiles = (
             DriverProfile.objects.select_related("user", "wallet")
@@ -160,8 +197,8 @@ class PortalDriversView(APIView):
                     queryset=DriverDocument.objects.filter(is_deleted=False),
                 )
             )
-            .filter(is_deleted=False)
-            .order_by("-updated_at")[:500]
+            .filter(pk__in=profile_ids, is_deleted=False)
+            .order_by("-created_at")
         )
 
         rows = [_serialize_driver_profile(profile) for profile in profiles]

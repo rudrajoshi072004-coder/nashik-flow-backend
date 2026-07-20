@@ -13,7 +13,14 @@ class HasRole(BasePermission):
 
 
 class IsAdminRole(HasRole):
-    allowed_roles = ("super_admin", "city_manager", "support_agent", "finance_admin")
+    allowed_roles = (
+        "super_admin",
+        "city_manager",
+        "support_agent",
+        "finance_admin",
+        "admin",
+        "ops_admin",
+    )
 
 
 class IsCustomerRole(HasRole):

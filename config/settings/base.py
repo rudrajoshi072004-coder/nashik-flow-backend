@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     "apps.coupons",
     "apps.incentives",
     "apps.admin_ops",
+    "apps.admin_portal",
     "apps.audit_logs",
     "apps.notifications",
     "apps.chat",

@@ -50,6 +50,7 @@ urlpatterns = [
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/v1/auth/", include("apps.authn.urls")),
+    path("api/v1/admin/portal/", include("apps.admin_portal.urls")),
     path("api/v1/health", HealthCheckView.as_view(), name="health-check"),
     path("api/v1/routing/driving-route/", DrivingRouteView.as_view(), name="driving-route"),
     path("api/v1/", include(router.urls)),

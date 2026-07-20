@@ -64,6 +64,10 @@ class BookingViewSet(viewsets.ModelViewSet):
             return own_as_customer
         if role in {"driver", "fleet_driver"}:
             return (own_as_customer | bookings_queryset_for_driver_user(user)).distinct()
+        from apps.drivers.models import DriverProfile
+
+        if DriverProfile.objects.filter(user=user, is_deleted=False).exists():
+            return (own_as_customer | bookings_queryset_for_driver_user(user)).distinct()
         return qs.filter(is_deleted=False)
 
     def perform_create(self, serializer):

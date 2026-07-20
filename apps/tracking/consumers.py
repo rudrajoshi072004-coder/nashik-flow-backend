@@ -25,8 +25,12 @@ class RealtimeConsumer(AsyncJsonWebsocketConsumer):
         await self.accept()
         await self.channel_layer.group_add(f"user_{self.user.id}", self.channel_name)
 
-        if self.user.role in {"driver", "fleet_driver"}:
+        profile = await sync_to_async(
+            lambda: DriverProfile.objects.filter(user=self.user, is_deleted=False).first()
+        )()
+        if profile is None and self.user.role in {"driver", "fleet_driver"}:
             profile, _ = await self._get_or_create_driver_profile()
+        if profile is not None:
             self.driver_group_name = f"driver_{profile.id}"
             await self.channel_layer.group_add(self.driver_group_name, self.channel_name)
         if self.user.role in {"super_admin", "city_manager", "support_agent", "finance_admin"}:
@@ -62,17 +66,21 @@ class RealtimeConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"event": "pong", "payload": {}})
             return
 
-        if event == "driver_offer_ack" and self.user.role in {"driver", "fleet_driver"}:
+        if event == "driver_offer_ack":
             booking_id = payload.get("booking_id")
-            profile = await sync_to_async(lambda: DriverProfile.objects.filter(user=self.user).first())()
+            profile = await sync_to_async(
+                lambda: DriverProfile.objects.filter(user=self.user, is_deleted=False).first()
+            )()
             if booking_id and profile:
                 from apps.dispatch.offer_delivery import record_driver_ack
 
                 await sync_to_async(record_driver_ack)(str(booking_id), str(profile.id))
             return
 
-        if event == "driver_location_update" and self.user.role in {"driver", "fleet_driver"}:
-            profile = await sync_to_async(lambda: DriverProfile.objects.filter(user=self.user).first())()
+        if event == "driver_location_update":
+            profile = await sync_to_async(
+                lambda: DriverProfile.objects.filter(user=self.user, is_deleted=False).first()
+            )()
             if not profile:
                 await self.send_json({"event": "driver_location_ack", "payload": {"ok": False}})
                 return

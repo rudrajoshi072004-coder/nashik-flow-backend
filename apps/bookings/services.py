@@ -59,8 +59,13 @@ def _accept_ride_while_searching(
     *, booking: Booking, actor, payload: dict
 ) -> TransitionResult:
     from apps.dispatch.services import driver_had_ride_request, on_driver_won_ride
+    from apps.drivers.models import DriverProfile
 
-    profile = actor.driver_profile
+    profile = getattr(actor, "driver_profile", None)
+    if profile is None:
+        profile = DriverProfile.objects.filter(user=actor, is_deleted=False).first()
+    if profile is None:
+        raise ValueError("Driver profile required to accept offers.")
     with transaction.atomic():
         locked = Booking.objects.select_for_update().get(id=booking.id)
         if locked.state != Booking.BookingState.SEARCHING_DRIVER:
@@ -195,13 +200,14 @@ def transition_booking_state(
 ) -> TransitionResult:
     payload = payload or {}
     from_state = booking.state
-    if (
-        from_state == Booking.BookingState.SEARCHING_DRIVER
-        and to_state == Booking.BookingState.DRIVER_ACCEPTED
-        and actor
-        and getattr(actor, "role", None) in {"driver", "fleet_driver"}
-    ):
-        return _accept_ride_while_searching(booking=booking, actor=actor, payload=payload)
+    if from_state == Booking.BookingState.SEARCHING_DRIVER and to_state == Booking.BookingState.DRIVER_ACCEPTED and actor:
+        from apps.drivers.models import DriverProfile
+
+        can_accept = getattr(actor, "role", None) in {"driver", "fleet_driver"} or DriverProfile.objects.filter(
+            user=actor, is_deleted=False
+        ).exists()
+        if can_accept:
+            return _accept_ride_while_searching(booking=booking, actor=actor, payload=payload)
     if (
         from_state == Booking.BookingState.SEARCHING_DRIVER
         and to_state == Booking.BookingState.DRIVER_ASSIGNED

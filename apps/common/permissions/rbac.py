@@ -31,6 +31,21 @@ class IsDriverRole(HasRole):
     allowed_roles = ("driver", "fleet_driver")
 
 
+class IsDriverRoleOrProfile(BasePermission):
+    """Allow driver/fleet_driver roles, or any user with a driver profile (e.g. super_admin testers)."""
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.user.is_superuser:
+            return True
+        if request.user.role in ("driver", "fleet_driver"):
+            return True
+        from apps.drivers.models import DriverProfile
+
+        return DriverProfile.objects.filter(user=request.user, is_deleted=False).exists()
+
+
 class IsCustomerOrAdmin(HasRole):
     allowed_roles = ("customer", "super_admin", "city_manager", "support_agent", "finance_admin")
 

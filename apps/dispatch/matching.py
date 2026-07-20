@@ -34,16 +34,17 @@ _VEHICLE_TYPE_TO_CATEGORY = {
 }
 
 
-def _category_match_q(booking: Booking) -> Q:
+def _category_match_q(booking: Booking, *, prefix: str = "") -> Q:
     """Match linked Vehicle.category or onboarding vehicle_type slug (e.g. 2w → 2-wheeler)."""
     category = booking.vehicle_category
     if category is None:
         return Q()
-    q = Q(vehicles__category=category)
+    pf = f"{prefix}__" if prefix else ""
+    q = Q(**{f"{pf}vehicles__category": category})
     cat_name = (category.name or "").strip().lower()
     for slug, label in _VEHICLE_TYPE_TO_CATEGORY.items():
         if label.lower() == cat_name:
-            q |= Q(vehicle_type__iexact=slug)
+            q |= Q(**{f"{pf}vehicle_type__iexact": slug})
     return q
 
 
@@ -146,7 +147,10 @@ def _eligible_profiles_from_redis_ids(
         return []
     ids = [d[0] for d in driver_distances]
     dist_map = {d[0]: dist for d in driver_distances}
-    q = DriverProfile.objects.filter(id__in=ids, is_online=True, is_deleted=False).filter(_not_on_active_trip())
+    q = (
+        DriverProfile.objects.filter(id__in=ids, is_online=True, is_deleted=False)
+        .exclude(id__in=_busy_driver_ids())
+    )
     if strict_kyc:
         q = q.filter(kyc_status=DriverProfile.KYCStatus.APPROVED)
     if strict_category:
@@ -209,8 +213,8 @@ def find_drivers_in_ring(
         )
         
         if strict_category:
-            q = q.filter(_category_match_q(booking))
-            
+            q = q.filter(_category_match_q(booking, prefix="driver"))
+
         if require_active_vehicle:
             q = q.filter(driver__vehicles__status=Vehicle.Status.ACTIVE)
             

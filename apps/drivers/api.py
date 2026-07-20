@@ -7,7 +7,7 @@ from apps.bookings.models import Booking
 from apps.bookings.querysets import bookings_queryset_for_driver_user
 from apps.bookings.serializers import BookingSerializer
 from apps.common.api.responses import success_response
-from apps.common.permissions.rbac import IsDriverRole
+from apps.common.permissions.rbac import IsDriverRoleOrProfile
 from apps.users.models import User
 from .models import DriverProfile
 from .onboarding_serializers import DriverOnboardingSubmitSerializer
@@ -16,7 +16,7 @@ from .serializers import DriverAvailabilitySerializer, DriverLocationSerializer,
 
 
 class DriverViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated, IsDriverRole]
+    permission_classes = [IsAuthenticated, IsDriverRoleOrProfile]
 
     def get_permissions(self):
         if self.action in {"submit_onboarding", "list", "update_profile"}:

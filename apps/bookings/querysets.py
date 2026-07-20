@@ -74,3 +74,35 @@ def bookings_queryset_for_driver_user(user):
         .distinct()
         .order_by("-created_at")
     )
+
+
+def bookings_queryset_for_request_user(user, base_qs=None):
+    """
+    Bookings visible in BookingViewSet for the authenticated user.
+    Uses Q/id__in composition instead of queryset ``|`` union (avoids PostgreSQL DISTINCT errors).
+    """
+    from apps.drivers.models import DriverProfile
+
+    qs = base_qs if base_qs is not None else Booking.objects.all()
+    if not getattr(user, "is_authenticated", False):
+        return qs.none()
+
+    role = getattr(user, "role", None)
+    if role is None:
+        return qs.none()
+
+    scoped = qs.filter(is_deleted=False)
+    own_as_customer = Q(customer=user)
+
+    if role == "customer":
+        return scoped.filter(own_as_customer)
+
+    has_driver_profile = role in {"driver", "fleet_driver"} or DriverProfile.objects.filter(
+        user=user, is_deleted=False
+    ).exists()
+
+    if has_driver_profile:
+        offered_ids = bookings_queryset_for_driver_user(user).values("id")
+        return scoped.filter(own_as_customer | Q(id__in=offered_ids)).distinct()
+
+    return scoped

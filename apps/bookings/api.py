@@ -11,7 +11,7 @@ from apps.vehicle_categories.models import VehicleCategory
 from apps.dispatch.tasks import dispatch_booking
 
 from .models import Booking
-from .querysets import bookings_queryset_for_driver_user
+from .querysets import bookings_queryset_for_request_user
 from .serializers import BookingSerializer, FareEstimateSerializer
 from .services import release_customer_previous_active_trips, transition_booking_state
 
@@ -52,23 +52,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         return [IsCustomerOrAdmin()]
 
     def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if not getattr(user, "is_authenticated", False):
-            return qs.none()
-        role = getattr(user, "role", None)
-        if role is None:
-            return qs.none()
-        own_as_customer = qs.filter(customer=user, is_deleted=False)
-        if role == "customer":
-            return own_as_customer
-        if role in {"driver", "fleet_driver"}:
-            return (own_as_customer | bookings_queryset_for_driver_user(user)).distinct()
-        from apps.drivers.models import DriverProfile
-
-        if DriverProfile.objects.filter(user=user, is_deleted=False).exists():
-            return (own_as_customer | bookings_queryset_for_driver_user(user)).distinct()
-        return qs.filter(is_deleted=False)
+        return bookings_queryset_for_request_user(self.request.user, super().get_queryset())
 
     def perform_create(self, serializer):
         booking = serializer.save(customer=self.request.user, state=Booking.BookingState.PENDING_QUOTE)
@@ -131,11 +115,18 @@ class BookingViewSet(viewsets.ModelViewSet):
         target_state = serializer.validated_data["to_state"]
         is_booking_customer = booking.customer_id == request.user.id
         if is_booking_customer and target_state not in {Booking.BookingState.CANCELLED_BY_CUSTOMER}:
-            return success_response(
-                {"detail": "Customers can only cancel their bookings."},
-                message="Forbidden",
-                status_code=status.HTTP_403_FORBIDDEN,
+            from apps.drivers.models import DriverProfile
+
+            accepting_as_driver = (
+                target_state == Booking.BookingState.DRIVER_ACCEPTED
+                and DriverProfile.objects.filter(user=request.user, is_deleted=False).exists()
             )
+            if not accepting_as_driver:
+                return success_response(
+                    {"detail": "Customers can only cancel their bookings."},
+                    message="Forbidden",
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
         try:
             result = transition_booking_state(
                 booking=booking,

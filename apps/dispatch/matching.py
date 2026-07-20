@@ -26,6 +26,27 @@ from apps.tracking.models import DriverLiveLocation
 from apps.tracking.redis_geo import georadius_active_drivers, redis_enabled
 from apps.vehicles.models import Vehicle
 
+_VEHICLE_TYPE_TO_CATEGORY = {
+    "2w": "2-wheeler",
+    "3w": "3-wheeler",
+    "truck": "truck",
+    "part_load": "part load",
+}
+
+
+def _category_match_q(booking: Booking) -> Q:
+    """Match linked Vehicle.category or onboarding vehicle_type slug (e.g. 2w → 2-wheeler)."""
+    category = booking.vehicle_category
+    if category is None:
+        return Q()
+    q = Q(vehicles__category=category)
+    cat_name = (category.name or "").strip().lower()
+    for slug, label in _VEHICLE_TYPE_TO_CATEGORY.items():
+        if label.lower() == cat_name:
+            q |= Q(vehicle_type__iexact=slug)
+    return q
+
+
 # (inner_km, outer_km)
 RADIUS_RINGS_KM: tuple[tuple[float, float], ...] = (
     (0.0, 2.0),
@@ -129,7 +150,7 @@ def _eligible_profiles_from_redis_ids(
     if strict_kyc:
         q = q.filter(kyc_status=DriverProfile.KYCStatus.APPROVED)
     if strict_category:
-        q = q.filter(vehicles__category=booking.vehicle_category)
+        q = q.filter(_category_match_q(booking))
     if require_active_vehicle:
         q = q.filter(vehicles__status=Vehicle.Status.ACTIVE)
     profiles = {str(p.id): p for p in q.distinct()}
@@ -188,7 +209,7 @@ def find_drivers_in_ring(
         )
         
         if strict_category:
-            q = q.filter(driver__vehicles__category=booking.vehicle_category)
+            q = q.filter(_category_match_q(booking))
             
         if require_active_vehicle:
             q = q.filter(driver__vehicles__status=Vehicle.Status.ACTIVE)

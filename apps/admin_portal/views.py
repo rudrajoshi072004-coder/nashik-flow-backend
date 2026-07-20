@@ -270,26 +270,9 @@ class PortalDriversView(APIView):
     permission_classes = [IsPortalAdmin]
 
     def get(self, request):
-        User = apps.get_model("users", "User")
         DriverProfile = apps.get_model("drivers", "DriverProfile")
         DriverDocument = apps.get_model("driver_documents", "DriverDocument")
-
-        driver_users = (
-            User.objects.filter(
-                role__in=[User.Role.DRIVER, User.Role.FLEET_DRIVER],
-                is_deleted=False,
-            )
-            .select_related("driver_profile", "driver_profile__wallet")
-            .order_by("-date_joined")[:500]
-        )
-
-        profile_ids: list = []
-        for user in driver_users:
-            profile = getattr(user, "driver_profile", None)
-            if profile is None or profile.is_deleted:
-                profile = ensure_driver_profile(user)
-            if profile and not profile.is_deleted:
-                profile_ids.append(profile.pk)
+        VehicleCategory = apps.get_model("vehicle_categories", "VehicleCategory")
 
         profiles = (
             DriverProfile.objects.select_related("user", "wallet")
@@ -305,11 +288,10 @@ class PortalDriversView(APIView):
                     ),
                 ),
             )
-            .filter(pk__in=profile_ids, is_deleted=False)
-            .order_by("-created_at")
+            .filter(is_deleted=False)
+            .order_by("-created_at")[:500]
         )
 
-        VehicleCategory = apps.get_model("vehicle_categories", "VehicleCategory")
         category_ids: set[str] = set()
         for profile in profiles:
             raw_type = (profile.vehicle_type or "").strip()
@@ -392,3 +374,49 @@ class PortalAuditLogsView(APIView):
                 }
             )
         return _ok({"count": len(rows), "results": rows})
+
+
+class PortalDriverDetailView(APIView):
+    """Approve/reject driver KYC from admin panel."""
+
+    permission_classes = [IsPortalAdmin]
+
+    def patch(self, request, driver_id):
+        from apps.drivers.models import DriverProfile
+
+        try:
+            profile = DriverProfile.objects.select_related("user", "wallet").get(pk=driver_id, is_deleted=False)
+        except DriverProfile.DoesNotExist:
+            return _fail("Driver not found", code=status.HTTP_404_NOT_FOUND)
+
+        payload = request.data if isinstance(request.data, dict) else {}
+        allowed = {"kyc_status", "is_online"}
+        changed = []
+        for key in allowed:
+            if key not in payload:
+                continue
+            value = payload[key]
+            if key == "kyc_status":
+                valid = {
+                    DriverProfile.KYCStatus.PENDING,
+                    DriverProfile.KYCStatus.APPROVED,
+                    DriverProfile.KYCStatus.REJECTED,
+                }
+                if value not in valid:
+                    return _fail("Invalid kyc_status")
+            setattr(profile, key, value)
+            changed.append(key)
+
+        if changed:
+            profile.save(update_fields=[*changed, "updated_at"])
+
+        VehicleCategory = apps.get_model("vehicle_categories", "VehicleCategory")
+        category_names = {}
+        raw_type = (profile.vehicle_type or "").strip()
+        if _looks_like_uuid(raw_type):
+            cat = VehicleCategory.objects.filter(pk=raw_type, is_deleted=False).first()
+            if cat:
+                category_names[str(cat.pk).lower()] = cat.name
+
+        row = _serialize_driver_profile(profile, category_names)
+        return _ok(row, message="Driver updated")

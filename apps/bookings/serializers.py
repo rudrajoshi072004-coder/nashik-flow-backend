@@ -102,18 +102,20 @@ class BookingSerializer(serializers.ModelSerializer):
         distance_km = _haversine_km(pickup_lat, pickup_lng, drop_lat, drop_lng)
 
         category = validated_data["vehicle_category"]
-        estimated_fare = max(category.minimum_fare, category.base_fare + (category.per_km_rate * distance_km))
+        from apps.pricing.services import (
+            calculate_estimated_fare,
+            fare_breakdown_payload,
+            resolve_rates_for_category,
+        )
+
+        city = "Nashik"
+        rates = resolve_rates_for_category(category, city=city)
+        estimated_fare = calculate_estimated_fare(rates, distance_km)
 
         validated_data["estimated_distance_km"] = distance_km
         validated_data["estimated_duration_min"] = int(max(10, float(distance_km) * 4))
         validated_data["estimated_fare"] = estimated_fare
-        validated_data["pricing_breakdown"] = {
-            "base_fare": str(category.base_fare),
-            "distance_km": str(distance_km),
-            "per_km_rate": str(category.per_km_rate),
-            "minimum_fare": str(category.minimum_fare),
-            "estimated_fare": str(estimated_fare),
-        }
+        validated_data["pricing_breakdown"] = fare_breakdown_payload(rates, distance_km, estimated_fare)
 
         booking = super().create(validated_data)
         for stop in stops_data:
@@ -157,4 +159,5 @@ class FareEstimateSerializer(serializers.Serializer):
     pickup_lng = serializers.FloatField()
     drop_lat = serializers.FloatField()
     drop_lng = serializers.FloatField()
+    city = serializers.CharField(required=False, default="Nashik", max_length=64)
     requires_helper = serializers.BooleanField(default=False)

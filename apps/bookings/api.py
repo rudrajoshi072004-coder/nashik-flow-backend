@@ -1,4 +1,3 @@
-from decimal import Decimal
 import logging
 
 from rest_framework import serializers, status, viewsets
@@ -86,24 +85,29 @@ class BookingViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
         category = VehicleCategory.objects.get(id=data["vehicle_category_id"], is_deleted=False, active=True)
         from .serializers import _haversine_km
+        from apps.pricing.services import (
+            calculate_estimated_fare,
+            fare_breakdown_payload,
+            resolve_rates_for_category,
+        )
 
         distance_km = _haversine_km(data["pickup_lat"], data["pickup_lng"], data["drop_lat"], data["drop_lng"])
-        helper_charge = Decimal("40.00") if data.get("requires_helper") else Decimal("0.00")
-        estimated_fare = max(
-            category.minimum_fare,
-            category.base_fare + (category.per_km_rate * distance_km) + helper_charge,
-        )
+        city = data.get("city") or "Nashik"
+        requires_helper = bool(data.get("requires_helper"))
+        rates = resolve_rates_for_category(category, city=city)
+        estimated_fare = calculate_estimated_fare(rates, distance_km, requires_helper=requires_helper)
         return success_response(
             {
                 "vehicle_category_id": str(category.id),
                 "distance_km": str(distance_km),
                 "estimated_duration_min": int(max(10, float(distance_km) * 4)),
                 "estimated_fare": str(estimated_fare),
-                "breakdown": {
-                    "base_fare": str(category.base_fare),
-                    "per_km_rate": str(category.per_km_rate),
-                    "helper_charge": str(helper_charge),
-                },
+                "breakdown": fare_breakdown_payload(
+                    rates,
+                    distance_km,
+                    estimated_fare,
+                    requires_helper=requires_helper,
+                ),
             }
         )
 

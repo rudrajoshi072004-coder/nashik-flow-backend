@@ -63,7 +63,7 @@ See `.env.railway.example`. Minimum:
 
 ## Deploy
 
-- Root directory: `nashik-flow-backend` (monorepo)
+- Root directory: `nashik-flow-backend-repo` (monorepo)
 - Uses `Dockerfile` / `railway.toml`
 - Entrypoint runs `migrate` after PostGIS check
 

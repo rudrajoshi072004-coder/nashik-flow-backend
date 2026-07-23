@@ -1,10 +1,12 @@
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, get_user_model
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
+
+from apps.common.permissions.rbac import IsAdminRole
 
 from .firebase_auth import FirebaseAuthError, issue_tokens_for_firebase
 from .phone_utils import find_user_by_phone
@@ -104,6 +106,38 @@ class JWTRefreshView(TokenRefreshView):
         return Response(payload, status=status.HTTP_200_OK)
 
 
+def _authenticate_phone_password(request, phone: str, password: str):
+    user = authenticate(request, username=phone, password=password)
+    if user is None:
+        existing, _ = find_user_by_phone(get_user_model(), phone)
+        if existing:
+            user = authenticate(request, username=existing.phone, password=password)
+    return user
+
+
+def _login_tokens_response(user):
+    refresh = RefreshToken.for_user(user)
+    return Response(
+        {
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "user": {
+                "id": str(user.id),
+                "phone": user.phone,
+                "role": user.role,
+                "city": user.city,
+            },
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+def _user_has_admin_role(user) -> bool:
+    if getattr(user, "is_superuser", False):
+        return True
+    return user.role in IsAdminRole.allowed_roles
+
+
 class PasswordLoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -113,21 +147,18 @@ class PasswordLoginView(APIView):
         serializer.is_valid(raise_exception=True)
         phone = serializer.validated_data["phone"]
         password = serializer.validated_data["password"]
-        user = authenticate(request, username=phone, password=password)
-        if user is None:
-            from django.contrib.auth import get_user_model
-
-            existing, _ = find_user_by_phone(get_user_model(), phone)
-            if existing:
-                user = authenticate(request, username=existing.phone, password=password)
+        user = _authenticate_phone_password(request, phone, password)
         if user is None:
             return Response({"detail": "Invalid phone or password."}, status=status.HTTP_400_BAD_REQUEST)
         if not user.is_active:
             return Response({"detail": "Account disabled."}, status=status.HTTP_403_FORBIDDEN)
 
-        requested_role = serializer.validated_data.get("role")
-        from django.contrib.auth import get_user_model
+        from apps.admin_portal.bootstrap import promote_bootstrap_admin_if_needed
 
+        promote_bootstrap_admin_if_needed(user)
+        user.refresh_from_db()
+
+        requested_role = serializer.validated_data.get("role")
         user_model = get_user_model()
         if requested_role == user_model.Role.DRIVER and user.role != user_model.Role.DRIVER:
             user.role = user_model.Role.DRIVER
@@ -136,20 +167,43 @@ class PasswordLoginView(APIView):
 
             DriverProfile.objects.get_or_create(user=user)
 
-        refresh = RefreshToken.for_user(user)
-        return Response(
-            {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user": {
-                    "id": str(user.id),
-                    "phone": user.phone,
-                    "role": user.role,
-                    "city": user.city,
+        return _login_tokens_response(user)
+
+
+class AdminLoginView(APIView):
+    """Admin portal login: promotes bootstrap phones, then requires an admin role."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        serializer = PasswordLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = serializer.validated_data["phone"]
+        password = serializer.validated_data["password"]
+        user = _authenticate_phone_password(request, phone, password)
+        if user is None:
+            return Response({"detail": "Invalid phone or password."}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.is_active:
+            return Response({"detail": "Account disabled."}, status=status.HTTP_403_FORBIDDEN)
+
+        from apps.admin_portal.bootstrap import promote_bootstrap_admin_if_needed
+
+        promote_bootstrap_admin_if_needed(user)
+        user.refresh_from_db()
+
+        if not _user_has_admin_role(user):
+            return Response(
+                {
+                    "detail": (
+                        "This account is not an admin. Ask your team to run: "
+                        "python manage.py promote_admin YOUR_PHONE"
+                    )
                 },
-            },
-            status=status.HTTP_200_OK,
-        )
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return _login_tokens_response(user)
 
 
 class FirebaseLoginView(APIView):

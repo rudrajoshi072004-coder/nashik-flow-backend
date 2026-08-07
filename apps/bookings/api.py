@@ -17,6 +17,35 @@ from .services import release_customer_previous_active_trips, transition_booking
 logger = logging.getLogger(__name__)
 
 
+def _user_can_driver_transition(user, booking: Booking, target_state: str) -> bool:
+    """Allow assigned drivers (including users who are also the customer) to progress trips."""
+    from apps.drivers.models import DriverProfile
+
+    profile = DriverProfile.objects.filter(user=user, is_deleted=False).first()
+    if profile is None:
+        return False
+
+    driver_targets = {
+        Booking.BookingState.DRIVER_ACCEPTED,
+        Booking.BookingState.DRIVER_ARRIVING,
+        Booking.BookingState.DRIVER_ARRIVED,
+        Booking.BookingState.PICKUP_OTP_PENDING,
+        Booking.BookingState.TRIP_STARTED,
+        Booking.BookingState.IN_TRANSIT,
+        Booking.BookingState.NEARING_DROP,
+        Booking.BookingState.COMPLETED,
+        Booking.BookingState.CANCELLED_BY_DRIVER,
+        Booking.BookingState.PAYMENT_PENDING,
+    }
+    if target_state not in driver_targets:
+        return False
+
+    if booking.state == Booking.BookingState.SEARCHING_DRIVER and target_state == Booking.BookingState.DRIVER_ACCEPTED:
+        return True
+
+    return booking.driver_id == profile.id
+
+
 class BookingTransitionSerializer(serializers.Serializer):
     to_state = serializers.CharField()
     payload = serializers.JSONField(required=False)
@@ -118,14 +147,9 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         target_state = serializer.validated_data["to_state"]
         is_booking_customer = booking.customer_id == request.user.id
-        if is_booking_customer and target_state not in {Booking.BookingState.CANCELLED_BY_CUSTOMER}:
-            from apps.drivers.models import DriverProfile
-
-            accepting_as_driver = (
-                target_state == Booking.BookingState.DRIVER_ACCEPTED
-                and DriverProfile.objects.filter(user=request.user, is_deleted=False).exists()
-            )
-            if not accepting_as_driver:
+        can_driver_transition = _user_can_driver_transition(request.user, booking, target_state)
+        if is_booking_customer and not can_driver_transition:
+            if target_state not in {Booking.BookingState.CANCELLED_BY_CUSTOMER}:
                 return success_response(
                     {"detail": "Customers can only cancel their bookings."},
                     message="Forbidden",

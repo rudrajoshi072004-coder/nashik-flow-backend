@@ -7,12 +7,14 @@ from apps.addresses.serializers import AddressSerializer
 from apps.bookings.models import Booking
 from apps.bookings.serializers import BookingSerializer
 from apps.common.api.responses import success_response
-from apps.common.permissions.rbac import IsCustomerRole
+from apps.common.permissions.rbac import IsCustomerOrAdmin
 from apps.users.serializers import UserSerializer
 
 
 class CustomerViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated, IsCustomerRole]
+    """Own-profile customer APIs. Admins allowed so shared test accounts (super_admin) work in the customer app."""
+
+    permission_classes = [IsAuthenticated, IsCustomerOrAdmin]
 
     def get_permissions(self):
         if getattr(self, "action", None) == "bookings":

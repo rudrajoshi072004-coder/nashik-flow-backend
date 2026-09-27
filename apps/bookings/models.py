@@ -81,3 +81,22 @@ class BookingStop(TimeStampedUUIDModel, SoftDeleteModel):
     class Meta:
         ordering = ["sequence"]
         unique_together = ("booking", "sequence")
+
+
+class BookingParcelPhoto(TimeStampedUUIDModel):
+    """Parcel photo taken by the driver at pickup or drop. Bytes live in the database."""
+
+    class Kind(models.TextChoices):
+        PICKUP = "pickup", "Pickup"
+        DROP = "drop", "Drop"
+
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="parcel_photos")
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    content_type = models.CharField(max_length=64, default="image/jpeg")
+    byte_size = models.PositiveIntegerField(default=0)
+    image = models.BinaryField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["booking", "kind"], name="uniq_booking_parcel_photo_kind"),
+        ]

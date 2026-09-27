@@ -218,6 +218,8 @@ def transition_booking_state(
     if to_state not in allowed:
         raise ValueError(f"Invalid transition: {from_state} -> {to_state}")
 
+    assert_parcel_photo_for_transition(booking, to_state)
+
     with transaction.atomic():
         current_seq = (
             TripEvent.objects.filter(booking=booking).order_by("-sequence").values_list("sequence", flat=True).first()
@@ -261,3 +263,41 @@ def _map_state_event(state: str) -> str | None:
         Booking.BookingState.CANCELLED_BY_ADMIN: "booking_cancelled",
     }
     return mapper.get(state)
+
+
+MAX_PARCEL_PHOTO_BYTES = 6 * 1024 * 1024
+
+
+def save_booking_parcel_photo(*, booking: Booking, kind: str, image_bytes: bytes, content_type: str):
+    from .models import BookingParcelPhoto
+
+    if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP}:
+        raise ValueError("Photo must be pickup or drop.")
+    if not image_bytes or len(image_bytes) < 32:
+        raise ValueError("Parcel photo is empty.")
+    if len(image_bytes) > MAX_PARCEL_PHOTO_BYTES:
+        raise ValueError("Parcel photo is too large.")
+    content_type = (content_type or "image/jpeg").split(";")[0].strip().lower()
+    if not content_type.startswith("image/"):
+        raise ValueError("Parcel photo must be an image.")
+    photo, _created = BookingParcelPhoto.objects.update_or_create(
+        booking=booking,
+        kind=kind,
+        defaults={
+            "image": image_bytes,
+            "content_type": content_type[:64],
+            "byte_size": len(image_bytes),
+        },
+    )
+    return photo
+
+
+def assert_parcel_photo_for_transition(booking: Booking, to_state: str) -> None:
+    from .models import BookingParcelPhoto
+
+    if to_state == Booking.BookingState.TRIP_STARTED:
+        if not BookingParcelPhoto.objects.filter(booking=booking, kind=BookingParcelPhoto.Kind.PICKUP).exists():
+            raise ValueError("Take a photo of the parcel at pickup before starting the trip.")
+    if to_state == Booking.BookingState.COMPLETED:
+        if not BookingParcelPhoto.objects.filter(booking=booking, kind=BookingParcelPhoto.Kind.DROP).exists():
+            raise ValueError("Take a photo of the parcel at drop before ending the trip.")

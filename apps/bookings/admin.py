@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Booking, BookingStop
+from .models import Booking, BookingParcelPhoto, BookingStop
 
 
 class BookingStopInline(admin.TabularInline):
@@ -14,6 +14,14 @@ class BookingAdmin(admin.ModelAdmin):
     list_filter = ("state", "booking_type", "requires_helper", "is_deleted")
     search_fields = ("id", "customer__phone", "driver__user__phone")
     inlines = [BookingStopInline]
+
+
+@admin.register(BookingParcelPhoto)
+class BookingParcelPhotoAdmin(admin.ModelAdmin):
+    list_display = ("booking", "kind", "byte_size", "content_type", "created_at")
+    list_filter = ("kind",)
+    search_fields = ("booking__id",)
+    exclude = ("image",)
 
 
 @admin.register(BookingStop)

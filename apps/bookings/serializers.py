@@ -4,7 +4,13 @@ import math
 from django.contrib.gis.geos import Point
 from rest_framework import serializers
 
-from .models import Booking, BookingStop
+from .models import Booking, BookingParcelPhoto, BookingStop
+
+
+def _parcel_photo_flag(instance, attr: str, kind: str) -> bool:
+    if attr in instance.__dict__:
+        return bool(instance.__dict__[attr])
+    return instance.parcel_photos.filter(kind=kind).exists()
 
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> Decimal:
@@ -150,6 +156,8 @@ class BookingSerializer(serializers.ModelSerializer):
             }
         else:
             data["driver_summary"] = None
+        data["has_pickup_parcel_photo"] = _parcel_photo_flag(instance, "has_pickup_parcel_photo", BookingParcelPhoto.Kind.PICKUP)
+        data["has_drop_parcel_photo"] = _parcel_photo_flag(instance, "has_drop_parcel_photo", BookingParcelPhoto.Kind.DROP)
         return data
 
 

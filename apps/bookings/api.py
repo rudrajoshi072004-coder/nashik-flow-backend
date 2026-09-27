@@ -1,5 +1,7 @@
 import logging
 
+from django.db.models import Exists, OuterRef
+from django.http import HttpResponse
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -9,10 +11,10 @@ from apps.trip_events.models import TripEvent
 from apps.vehicle_categories.models import VehicleCategory
 from apps.dispatch.tasks import dispatch_booking
 
-from .models import Booking
+from .models import Booking, BookingParcelPhoto
 from .querysets import bookings_queryset_for_request_user
 from .serializers import BookingSerializer, FareEstimateSerializer
-from .services import release_customer_previous_active_trips, transition_booking_state
+from .services import release_customer_previous_active_trips, save_booking_parcel_photo, transition_booking_state
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         if action in {"create"}:
             # Drivers (and other roles) may book deliveries on the customer app with the same phone.
             return [IsAuthenticated()]
-        if action in {"list", "retrieve", "timeline"}:
+        if action in {"list", "retrieve", "timeline", "parcel_photo"}:
             return [IsAuthenticated()]
         if action in {"state_transition"}:
             return [IsAuthenticated()]
@@ -80,7 +82,15 @@ class BookingViewSet(viewsets.ModelViewSet):
         return [IsCustomerOrAdmin()]
 
     def get_queryset(self):
-        return bookings_queryset_for_request_user(self.request.user, super().get_queryset())
+        queryset = bookings_queryset_for_request_user(self.request.user, super().get_queryset())
+        return queryset.annotate(
+            has_pickup_parcel_photo=Exists(
+                BookingParcelPhoto.objects.filter(booking_id=OuterRef("pk"), kind=BookingParcelPhoto.Kind.PICKUP)
+            ),
+            has_drop_parcel_photo=Exists(
+                BookingParcelPhoto.objects.filter(booking_id=OuterRef("pk"), kind=BookingParcelPhoto.Kind.DROP)
+            ),
+        )
 
     def perform_create(self, serializer):
         booking = serializer.save(customer=self.request.user, state=Booking.BookingState.PENDING_QUOTE)
@@ -169,6 +179,57 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
         return success_response({"booking_id": result.booking_id, "state": result.new_state, "seq": result.seq})
+
+    @action(detail=True, methods=["get", "post"], url_path="parcel-photo")
+    def parcel_photo(self, request, pk=None):
+        booking = self.get_object()
+        kind = (request.data.get("kind") if request.method == "POST" else request.query_params.get("kind") or "").strip()
+        if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP}:
+            return success_response(
+                {"detail": "kind must be pickup or drop."},
+                message="Invalid photo",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if request.method == "GET":
+            photo = BookingParcelPhoto.objects.filter(booking=booking, kind=kind).first()
+            if photo is None:
+                return success_response(
+                    {"detail": "Parcel photo not found."},
+                    message="Not found",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            return HttpResponse(bytes(photo.image), content_type=photo.content_type or "image/jpeg")
+
+        if not _user_can_driver_transition(request.user, booking, Booking.BookingState.TRIP_STARTED):
+            return success_response(
+                {"detail": "Only the assigned driver can upload a parcel photo."},
+                message="Forbidden",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        upload = request.FILES.get("photo")
+        if upload is None:
+            return success_response(
+                {"detail": "Attach the parcel photo as photo."},
+                message="Invalid photo",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            photo = save_booking_parcel_photo(
+                booking=booking,
+                kind=kind,
+                image_bytes=upload.read(),
+                content_type=getattr(upload, "content_type", "") or "image/jpeg",
+            )
+        except ValueError as exc:
+            return success_response(
+                {"detail": str(exc)},
+                message="Invalid photo",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        return success_response(
+            {"booking_id": str(booking.id), "kind": photo.kind, "byte_size": photo.byte_size},
+            message="Parcel photo saved",
+        )
 
     @action(detail=True, methods=["post"], url_path="admin-update-state", permission_classes=[IsAdminRole])
     def admin_update_state(self, request, pk=None):

@@ -111,7 +111,7 @@ def _accept_ride_while_searching(
         **event_payload,
         "driver_id": str(profile.id),
         "driver_phone": profile.user.phone,
-        "driver_name": profile.user.phone,
+        "driver_name": profile.public_display_name(),
         "vehicle_number": vehicle.registration_number if vehicle else "",
         "vehicle_type": vehicle.category.name if vehicle and vehicle.category_id else "",
         "rating_avg": str(profile.rating_avg),

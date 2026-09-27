@@ -142,7 +142,7 @@ class BookingSerializer(serializers.ModelSerializer):
             user = profile.user
             data["driver_summary"] = {
                 "driver_id": str(profile.id),
-                "driver_name": getattr(user, "phone", "") or "Driver",
+                "driver_name": profile.public_display_name(),
                 "driver_phone": getattr(user, "phone", ""),
                 "vehicle_number": vehicle.registration_number if vehicle else "",
                 "vehicle_type": vehicle.category.name if vehicle and vehicle.category_id else "",

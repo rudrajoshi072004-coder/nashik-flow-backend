@@ -28,5 +28,22 @@ class DriverProfile(TimeStampedUUIDModel, SoftDeleteModel):
     fuel_type = models.CharField(max_length=16, blank=True, default="")
     operation_city = models.CharField(max_length=64, blank=True, default="")
 
+    def public_display_name(self) -> str:
+        """Name shown to the customer. Never fall back to the phone number."""
+        user = self.user
+        phone = (getattr(user, "phone", "") or "").strip()
+        first = (getattr(user, "first_name", "") or "").strip()
+        last = (getattr(user, "last_name", "") or "").strip()
+        full = " ".join(part for part in (first, last) if part).strip()
+        for raw in (self.driver_name, self.owner_name, full, first):
+            text = (raw or "").strip()
+            if not text or text == phone:
+                continue
+            digits = "".join(ch for ch in text if ch.isdigit())
+            if len(digits) >= 10:
+                continue
+            return text
+        return "Driver"
+
     class Meta:
         indexes = [models.Index(fields=["kyc_status", "is_online"])]

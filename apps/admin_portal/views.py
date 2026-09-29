@@ -306,6 +306,67 @@ class PortalDriversView(APIView):
         rows = [_serialize_driver_profile(profile, category_names) for profile in profiles]
         return _ok({"count": len(rows), "results": rows})
 
+    def post(self, request):
+        from django.contrib.auth import get_user_model
+
+        from apps.authn.phone_utils import find_user_by_phone
+        from apps.drivers.models import DriverProfile
+
+        payload = request.data if isinstance(request.data, dict) else {}
+        phone_raw = str(payload.get("phone") or "").strip()
+        password = str(payload.get("password") or "")
+        if not phone_raw:
+            return _fail("Phone number is required")
+        if len(password) < 6:
+            return _fail("Password must be at least 6 characters")
+
+        user_model = get_user_model()
+        existing, phone = find_user_by_phone(user_model, phone_raw)
+        if not phone:
+            return _fail("Enter a valid phone number")
+
+        admin_roles = {
+            user_model.Role.SUPER_ADMIN,
+            user_model.Role.CITY_MANAGER,
+            user_model.Role.SUPPORT_AGENT,
+            user_model.Role.FINANCE_ADMIN,
+        }
+        if existing:
+            if getattr(existing, "is_superuser", False) or existing.role in admin_roles:
+                return _fail("This phone belongs to an admin account and cannot be added as a driver.")
+            if existing.role in {user_model.Role.DRIVER, user_model.Role.FLEET_DRIVER}:
+                return _fail("A driver with this phone number already exists.")
+            existing.role = user_model.Role.DRIVER
+            existing.is_active = True
+            existing.is_phone_verified = True
+            existing.set_password(password)
+            existing.save(update_fields=["role", "is_active", "is_phone_verified", "password", "updated_at"])
+            user = existing
+        else:
+            user = user_model(
+                phone=phone,
+                role=user_model.Role.DRIVER,
+                is_active=True,
+                is_phone_verified=True,
+                city="Nashik",
+            )
+            user.set_password(password)
+            user.save()
+
+        profile = ensure_driver_profile(user)
+        if profile is None:
+            return _fail("Could not create the driver profile")
+        if not profile.driver_phone:
+            profile.driver_phone = phone
+            profile.save(update_fields=["driver_phone", "updated_at"])
+
+        profile = (
+            DriverProfile.objects.select_related("user", "wallet")
+            .prefetch_related("documents", "vehicles")
+            .get(pk=profile.pk)
+        )
+        return _ok(_serialize_driver_profile(profile), message="Driver created")
+
 
 class PortalCustomersView(APIView):
     permission_classes = [IsPortalAdmin]

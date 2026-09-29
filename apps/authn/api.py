@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -44,16 +45,18 @@ class OTPRequestView(APIView):
         serializer = OTPRequestSerializer(data=_coerce_otp_payload(request.data))
         serializer.is_valid(raise_exception=True)
         phone = serializer.validated_data["phone"]
-        otp = request_otp(phone)
-        return Response(
-            {
-                "message": "OTP generated",
-                "phone": phone,
-                "otp_dev_only": otp,
-                "expires_in_seconds": 300,
-            },
-            status=status.HTTP_200_OK,
-        )
+        try:
+            otp = request_otp(phone)
+        except RuntimeError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        payload = {
+            "message": "OTP sent",
+            "phone": phone,
+            "expires_in_seconds": 300,
+        }
+        if getattr(settings, "DEBUG", False):
+            payload["otp_dev_only"] = otp
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class OTPVerifyView(APIView):

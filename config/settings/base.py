@@ -360,6 +360,9 @@ CORS_ALLOW_ALL_ORIGINS = True
 # When set (e.g. 123456), OTP login uses this fixed code and skips cache lookup on verify.
 # Needed on multi-worker Railway when Redis is unavailable — locmem cache is not shared.
 OTP_DEV_BYPASS = os.getenv("OTP_DEV_BYPASS", "").strip()
+MSG91_AUTH_KEY = os.getenv("MSG91_AUTH_KEY", "").strip()
+MSG91_TEMPLATE_ID = os.getenv("MSG91_TEMPLATE_ID", "").strip()
+FAST2SMS_API_KEY = os.getenv("FAST2SMS_API_KEY", "").strip()
 
 REDIS_URL = (
     os.getenv("REDIS_URL")

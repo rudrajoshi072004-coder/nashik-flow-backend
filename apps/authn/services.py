@@ -1,4 +1,5 @@
 import random
+import logging
 
 from django.conf import settings
 from django.core.cache import cache
@@ -6,6 +7,8 @@ from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .phone_utils import find_user_by_phone, normalize_phone_e164
+
+logger = logging.getLogger(__name__)
 
 
 OTP_TTL_SECONDS = 300
@@ -21,10 +24,17 @@ def _dev_bypass_otp() -> str:
 
 
 def request_otp(phone: str) -> str:
+    from apps.notifications.sms import send_otp_sms
+
     phone = normalize_phone_e164(phone)
     bypass = _dev_bypass_otp()
     otp = bypass if bypass else f"{random.randint(100000, 999999)}"
     cache.set(_otp_cache_key(phone), otp, timeout=OTP_TTL_SECONDS)
+    sent = send_otp_sms(phone, otp)
+    if not sent:
+        logger.warning("OTP generated for %s but SMS was not sent", phone)
+        if not getattr(settings, "DEBUG", False):
+            raise RuntimeError("OTP SMS could not be sent")
     return otp
 
 

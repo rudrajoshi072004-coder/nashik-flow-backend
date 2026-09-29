@@ -74,3 +74,30 @@ def send_fcm_push(token: str, title: str, body: str, data: dict | None = None) -
     except Exception:
         logger.exception("FCM send failed")
         return False
+
+
+def notify_driver_verified(user) -> None:
+    """Push + in-app notice after admin KYC approval."""
+    title = "You are verified"
+    body = "Your Carryoo account is verified. Open the app to start a practice ride."
+    try:
+        from apps.notifications.models import Notification
+
+        Notification.objects.create(
+            recipient=user,
+            category=Notification.Category.SYSTEM,
+            title=title,
+            message=body,
+            payload={"type": "kyc_approved"},
+        )
+    except Exception:
+        logger.exception("Could not store KYC verified notification")
+
+    token = getattr(user, "fcm_token", None)
+    if token:
+        send_fcm_push(
+            token=token,
+            title=title,
+            body=body,
+            data={"type": "kyc_approved"},
+        )

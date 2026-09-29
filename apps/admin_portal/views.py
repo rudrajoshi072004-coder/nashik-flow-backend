@@ -452,6 +452,7 @@ class PortalDriverDetailView(APIView):
 
         payload = request.data if isinstance(request.data, dict) else {}
         allowed = {"kyc_status", "is_online"}
+        previous_kyc = profile.kyc_status
         changed = []
         for key in allowed:
             if key not in payload:
@@ -470,6 +471,14 @@ class PortalDriverDetailView(APIView):
 
         if changed:
             profile.save(update_fields=[*changed, "updated_at"])
+            if (
+                "kyc_status" in changed
+                and previous_kyc != DriverProfile.KYCStatus.APPROVED
+                and profile.kyc_status == DriverProfile.KYCStatus.APPROVED
+            ):
+                from apps.notifications.fcm import notify_driver_verified
+
+                notify_driver_verified(profile.user)
 
         VehicleCategory = apps.get_model("vehicle_categories", "VehicleCategory")
         category_names = {}

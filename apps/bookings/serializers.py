@@ -154,10 +154,16 @@ class BookingSerializer(serializers.ModelSerializer):
                 "vehicle_type": vehicle.category.name if vehicle and vehicle.category_id else "",
                 "rating_avg": str(profile.rating_avg),
             }
-        else:
-            data["driver_summary"] = None
-        data["has_pickup_parcel_photo"] = _parcel_photo_flag(instance, "has_pickup_parcel_photo", BookingParcelPhoto.Kind.PICKUP)
-        data["has_drop_parcel_photo"] = _parcel_photo_flag(instance, "has_drop_parcel_photo", BookingParcelPhoto.Kind.DROP)
+        has_pickup = _parcel_photo_flag(instance, "has_pickup_parcel_photo", BookingParcelPhoto.Kind.PICKUP)
+        has_drop = _parcel_photo_flag(instance, "has_drop_parcel_photo", BookingParcelPhoto.Kind.DROP)
+        data["has_pickup_parcel_photo"] = has_pickup
+        data["has_drop_parcel_photo"] = has_drop
+        data["pickup_photo_url"] = (
+            f"/api/v1/bookings/{instance.id}/parcel-photo/?kind=pickup" if has_pickup else None
+        )
+        data["drop_photo_url"] = (
+            f"/api/v1/bookings/{instance.id}/parcel-photo/?kind=drop" if has_drop else None
+        )
         return data
 
 

@@ -163,10 +163,16 @@ def _serialize_driver_profile(profile, category_names: dict[str, str] | None = N
     for doc in profile.documents.all():
         if getattr(doc, "is_deleted", False):
             continue
+        raw_key = str(doc.file_key or "").strip()
+        doc_url = raw_key if (raw_key.startswith("http://") or raw_key.startswith("https://") or raw_key.startswith("data:")) else None
         documents.append(
             {
+                "id": str(doc.id),
                 "type": doc.get_document_type_display() if hasattr(doc, "get_document_type_display") else doc.document_type,
-                "number": doc.file_key or "—",
+                "number": raw_key or "—",
+                "file_key": raw_key,
+                "file_url": doc_url,
+                "url": doc_url,
                 "status": _doc_status_label(doc.status),
                 "expiry": "—",
             }

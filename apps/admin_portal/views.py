@@ -375,12 +375,17 @@ class PortalCustomersView(APIView):
         User = apps.get_model("users", "User")
         BookingModel = apps.get_model("bookings", "Booking")
         rows = []
-        customers = User.objects.filter(role=User.Role.CUSTOMER, is_deleted=False).order_by("-date_joined")[:200]
-        booking_counts = dict(
-            BookingModel.objects.filter(is_deleted=False)
-            .values("customer_id")
-            .annotate(c=Count("id"))
-            .values_list("customer_id", "c")
+        customers = list(User.objects.filter(role=User.Role.CUSTOMER, is_deleted=False).order_by("-date_joined")[:200])
+        customer_ids = [u.pk for u in customers]
+        booking_counts = (
+            dict(
+                BookingModel.objects.filter(customer_id__in=customer_ids, is_deleted=False)
+                .values("customer_id")
+                .annotate(c=Count("id"))
+                .values_list("customer_id", "c")
+            )
+            if customer_ids
+            else {}
         )
         for user in customers:
             name = f"{user.first_name or ''} {user.last_name or ''}".strip()

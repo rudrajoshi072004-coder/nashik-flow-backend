@@ -17,26 +17,22 @@ def host_from_url(url: str) -> str:
     return (urlparse(url).hostname or "").strip()
 
 
-def is_valid_railway_db_url(url: str) -> bool:
+def is_valid_db_url(url: str) -> bool:
     url = (url or "").strip()
     if not url.startswith(("postgresql://", "postgres://")):
         return False
     host = host_from_url(url)
-    if not host or host.lower() in LOCAL_HOSTS:
-        return False
-    if host.endswith(".railway.internal"):
+    if not host:
         return False
     if "@://" in url or url.count("@") > 1:
         return False
-    if ".proxy.rlwy.net" in host or ".proxy.rlwy.net" in url:
-        return True
-    return bool(re.match(r"^[a-zA-Z0-9.-]+$", host))
+    return True
 
 
 def pick_database_url() -> str:
     for key in ("DATABASE_PUBLIC_URL", "DATABASE_URL", "DATABASE_PRIVATE_URL", "POSTGRES_URL"):
         candidate = (os.getenv(key) or "").strip()
-        if is_valid_railway_db_url(candidate):
+        if is_valid_db_url(candidate):
             return candidate
     return ""
 

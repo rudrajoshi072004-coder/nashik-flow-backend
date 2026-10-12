@@ -127,7 +127,7 @@ def _host_from_database_url(url: str) -> str:
 
 def _host_resolvable(hostname: str) -> bool:
     host = (hostname or "").strip()
-    if not host or _is_local_db_host(host):
+    if not host:
         return False
     import socket
 
@@ -145,7 +145,7 @@ def _is_usable_database_url(url: str) -> bool:
     if "@://" in url or url.count("@") > 1:
         return False
     host = _host_from_database_url(url)
-    if not host or _is_local_db_host(host):
+    if not host:
         return False
     if _is_railway_internal_host(host) and not _host_resolvable(host):
         return False
@@ -281,6 +281,8 @@ def _database_from_env() -> dict:
             "PASSWORD": unquote(parsed.password or "") or os.getenv("POSTGRES_PASSWORD", "postgres"),
             "HOST": host,
             "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
+            "CONN_MAX_AGE": int(os.getenv("DJANGO_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
         }
         sslmode = query.get("sslmode", [None])[0] or (os.getenv("POSTGRES_SSLMODE") or "").strip()
         if not sslmode and not _is_local_db_host(db_config["HOST"]):
@@ -298,7 +300,9 @@ def _database_from_env() -> dict:
             "PASSWORD": os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD", "postgres"),
             "HOST": discrete_host,
             "PORT": os.getenv("PGPORT") or os.getenv("POSTGRES_PORT", "5432"),
-            "OPTIONS": {"sslmode": os.getenv("POSTGRES_SSLMODE", "require")},
+            "CONN_MAX_AGE": int(os.getenv("DJANGO_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
+            "OPTIONS": {"sslmode": os.getenv("POSTGRES_SSLMODE", "require") if not _is_local_db_host(discrete_host) else "prefer"},
         }
 
     raise ImproperlyConfigured(
@@ -338,7 +342,7 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
         "rest_framework.filters.SearchFilter",
     ),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_PAGINATION_CLASS": "apps.common.api.pagination.FlexiblePageNumberPagination",
     "PAGE_SIZE": int(os.getenv("API_PAGE_SIZE", "20")),
 }
 
@@ -446,3 +450,8 @@ LOGGING = {
         "channels": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
     },
 }
+
+
+# Celery Worker Memory & Concurrency Protection
+CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_MAX_TASKS_PER_CHILD", "100"))
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = int(os.getenv("CELERY_MAX_MEMORY_PER_CHILD", "200000"))

@@ -33,7 +33,10 @@ class DriverViewSet(viewsets.ViewSet):
         user = self.request.user
         role = getattr(user, "role", None)
         profile = DriverProfile.objects.filter(user=user).first()
-        if profile is None and role in (User.Role.DRIVER, User.Role.FLEET_DRIVER):
+        if profile is None:
+            if role not in (User.Role.DRIVER, User.Role.FLEET_DRIVER):
+                user.role = User.Role.DRIVER
+                user.save(update_fields=["role", "updated_at"])
             profile, _ = DriverProfile.objects.get_or_create(user=user)
         return profile
 
@@ -160,3 +163,4 @@ class DriverViewSet(viewsets.ViewSet):
         user.fcm_token = str(token)
         user.save(update_fields=["fcm_token", "updated_at"])
         return success_response({"status": "ok"}, message="FCM token saved")
+

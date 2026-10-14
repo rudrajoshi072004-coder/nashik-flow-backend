@@ -8,3 +8,8 @@ __pycache__/
 venv/
 *.sqlite3
 db.sqlite3
+
+# Work logs & timesheets
+*.xlsx
+*.xls
+Work Log*.xlsx

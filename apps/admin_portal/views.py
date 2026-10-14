@@ -164,7 +164,13 @@ def _serialize_driver_profile(profile, category_names: dict[str, str] | None = N
         if getattr(doc, "is_deleted", False):
             continue
         raw_key = str(doc.file_key or "").strip()
-        doc_url = raw_key if (raw_key.startswith("http://") or raw_key.startswith("https://") or raw_key.startswith("data:")) else None
+        doc_url = None
+        if raw_key.startswith("http://") or raw_key.startswith("https://") or raw_key.startswith("data:"):
+            doc_url = raw_key
+        elif raw_key:
+            from apps.common.r2 import generate_presigned_url
+            doc_url = generate_presigned_url(raw_key, expires_in=1800)
+
         documents.append(
             {
                 "id": str(doc.id),

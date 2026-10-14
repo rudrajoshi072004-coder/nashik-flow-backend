@@ -5,9 +5,21 @@ from apps.common.models import SoftDeleteModel, TimeStampedUUIDModel
 
 
 class PricingRule(TimeStampedUUIDModel, SoftDeleteModel):
+    class TripType(models.TextChoices):
+        WITHIN_CITY = "within_city", "Within City"
+        OUTSTATION = "outstation", "Outstation"
+
     city = models.CharField(max_length=64, default="Nashik", db_index=True)
     vehicle_category = models.ForeignKey("vehicle_categories.VehicleCategory", on_delete=models.CASCADE, related_name="pricing_rules")
     name = models.CharField(max_length=120)
+    trip_type = models.CharField(
+        max_length=32,
+        choices=TripType.choices,
+        default=TripType.WITHIN_CITY,
+        db_index=True,
+    )
+    min_distance_km = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    max_distance_km = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     base_fare = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     per_km_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     per_min_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)

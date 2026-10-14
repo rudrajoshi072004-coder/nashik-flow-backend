@@ -21,6 +21,10 @@ class ServiceZoneSerializer(serializers.ModelSerializer):
         points = validated_data.pop("polygon_points", None)
         if points:
             validated_data["polygon"] = Polygon(tuple((float(lng), float(lat)) for lat, lng in points))
+        elif "polygon" not in validated_data:
+            validated_data["polygon"] = Polygon(
+                ((73.7, 19.9), (73.9, 19.9), (73.9, 20.1), (73.7, 20.1), (73.7, 19.9))
+            )
         return super().create(validated_data)
 
 

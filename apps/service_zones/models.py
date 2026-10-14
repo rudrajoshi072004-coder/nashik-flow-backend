@@ -9,6 +9,12 @@ class ServiceZone(TimeStampedUUIDModel, SoftDeleteModel):
     polygon = models.PolygonField(srid=4326, geography=True)
     active = models.BooleanField(default=True, db_index=True)
     dispatch_radius_km = models.DecimalField(max_digits=6, decimal_places=2, default=5)
+    service_radius_km = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=50,
+        help_text="Max distance (km) for within-city trips from service center.",
+    )
 
     class Meta:
         unique_together = ("city_name", "zone_name")

@@ -84,7 +84,7 @@ class BookingStop(TimeStampedUUIDModel, SoftDeleteModel):
 
 
 class BookingParcelPhoto(TimeStampedUUIDModel):
-    """Parcel photo taken by the driver at pickup or drop. Bytes live in the database."""
+    """Parcel photo taken by the driver at pickup or drop. Stored in Cloudflare R2."""
 
     class Kind(models.TextChoices):
         PICKUP = "pickup", "Pickup"
@@ -94,7 +94,9 @@ class BookingParcelPhoto(TimeStampedUUIDModel):
     kind = models.CharField(max_length=16, choices=Kind.choices)
     content_type = models.CharField(max_length=64, default="image/jpeg")
     byte_size = models.PositiveIntegerField(default=0)
-    image = models.BinaryField()
+    file_key = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    image_url = models.URLField(max_length=500, blank=True, default="")
+    image = models.BinaryField(null=True, blank=True)
 
     class Meta:
         constraints = [

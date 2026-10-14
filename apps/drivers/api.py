@@ -19,7 +19,7 @@ class DriverViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsDriverRoleOrProfile]
 
     def get_permissions(self):
-        if self.action in {"submit_onboarding", "list", "update_profile"}:
+        if self.action in {"submit_onboarding", "upload_document", "list", "update_profile"}:
             return [IsAuthenticated()]
         return super().get_permissions()
 
@@ -61,6 +61,93 @@ class DriverViewSet(viewsets.ViewSet):
         return success_response(
             DriverProfileSerializer(profile).data,
             message="Driver onboarding submitted",
+            status_code=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=False, methods=["post"], url_path="upload-document")
+    def upload_document(self, request):
+        import time
+        from apps.common.r2 import generate_presigned_url, is_r2_configured, upload_bytes_to_r2
+        from apps.driver_documents.models import DriverDocument
+        from apps.drivers.onboarding_service import DOCUMENT_TYPE_MAP
+
+        profile = self.get_object()
+        if not profile:
+            return self._missing_profile_response()
+
+        raw_type = str(request.data.get("document_type") or "").strip().lower()
+        doc_type = DOCUMENT_TYPE_MAP.get(raw_type) or raw_type
+        valid_types = {c[0] for c in DriverDocument.DocumentType.choices}
+        if doc_type not in valid_types:
+            return success_response(
+                {"detail": f"Invalid document_type '{raw_type}'. Allowed: {sorted(list(valid_types))}"},
+                message="Invalid document type",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        upload = request.FILES.get("file") or request.FILES.get("photo") or request.FILES.get("document")
+        if not upload:
+            return success_response(
+                {"detail": "Attach file as 'file', 'photo', or 'document'."},
+                message="No file uploaded",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        content_type = getattr(upload, "content_type", "") or "image/jpeg"
+        content_type = content_type.split(";")[0].strip().lower()
+        if not (content_type.startswith("image/") or content_type == "application/pdf"):
+            return success_response(
+                {"detail": "File must be an image (JPEG, PNG, WebP) or PDF."},
+                message="Invalid file format",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        file_bytes = upload.read()
+        if len(file_bytes) > 10 * 1024 * 1024:
+            return success_response(
+                {"detail": "File size exceeds 10 MB limit."},
+                message="File too large",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ext = (
+            "pdf"
+            if content_type == "application/pdf"
+            else ("webp" if "webp" in content_type else ("png" if "png" in content_type else "jpg"))
+        )
+        r2_key = f"drivers/{profile.id}/docs/{doc_type}_{int(time.time())}.{ext}"
+
+        file_key = r2_key
+        if is_r2_configured():
+            uploaded_key = upload_bytes_to_r2(r2_key, file_bytes, content_type)
+            if not uploaded_key:
+                return success_response(
+                    {"detail": "Failed to store document in Cloudflare R2."},
+                    message="Storage failure",
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            file_key = uploaded_key
+
+        doc_record, _ = DriverDocument.objects.update_or_create(
+            driver=profile,
+            document_type=doc_type,
+            defaults={
+                "file_key": file_key,
+                "status": DriverDocument.Status.PENDING,
+            },
+        )
+
+        preview_url = generate_presigned_url(file_key, expires_in=1800) if is_r2_configured() else None
+
+        return success_response(
+            {
+                "id": str(doc_record.id),
+                "document_type": doc_type,
+                "file_key": file_key,
+                "preview_url": preview_url,
+                "status": doc_record.status,
+            },
+            message="Document uploaded successfully",
             status_code=status.HTTP_201_CREATED,
         )
 

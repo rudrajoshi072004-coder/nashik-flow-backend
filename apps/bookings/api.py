@@ -123,30 +123,32 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         category = VehicleCategory.objects.get(id=data["vehicle_category_id"], is_deleted=False, active=True)
-        from .serializers import _haversine_km
-        from apps.pricing.services import (
-            calculate_estimated_fare,
-            fare_breakdown_payload,
-            resolve_rates_for_category,
-        )
+        from apps.pricing.trip_pricing import compute_fare_quote
 
-        distance_km = _haversine_km(data["pickup_lat"], data["pickup_lng"], data["drop_lat"], data["drop_lng"])
         city = data.get("city") or "Nashik"
         requires_helper = bool(data.get("requires_helper"))
-        rates = resolve_rates_for_category(category, city=city)
-        estimated_fare = calculate_estimated_fare(rates, distance_km, requires_helper=requires_helper)
+        requested_trip_type = (data.get("trip_type") or "").strip() or None
+        quote = compute_fare_quote(
+            category=category,
+            pickup_lat=data["pickup_lat"],
+            pickup_lng=data["pickup_lng"],
+            drop_lat=data["drop_lat"],
+            drop_lng=data["drop_lng"],
+            city=city,
+            requested_trip_type=requested_trip_type,
+            requires_helper=requires_helper,
+        )
         return success_response(
             {
                 "vehicle_category_id": str(category.id),
-                "distance_km": str(distance_km),
-                "estimated_duration_min": int(max(10, float(distance_km) * 4)),
-                "estimated_fare": str(estimated_fare),
-                "breakdown": fare_breakdown_payload(
-                    rates,
-                    distance_km,
-                    estimated_fare,
-                    requires_helper=requires_helper,
-                ),
+                "distance_km": str(quote.distance_km),
+                "distance_source": quote.distance_source,
+                "estimated_duration_min": quote.estimated_duration_min,
+                "estimated_fare": str(quote.estimated_fare),
+                "trip_type": quote.trip_type,
+                "resolved_trip_type": quote.resolved_trip_type,
+                "service_radius_km": str(quote.service_radius_km),
+                "breakdown": quote.breakdown,
             }
         )
 
@@ -198,7 +200,22 @@ class BookingViewSet(viewsets.ModelViewSet):
                     message="Not found",
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
-            return HttpResponse(bytes(photo.image), content_type=photo.content_type or "image/jpeg")
+            if photo.image_url and photo.image_url.startswith("http"):
+                from django.http import HttpResponseRedirect
+                return HttpResponseRedirect(photo.image_url)
+            if photo.file_key:
+                from apps.common.r2 import generate_presigned_url
+                signed_url = generate_presigned_url(photo.file_key, expires_in=1800)
+                if signed_url:
+                    from django.http import HttpResponseRedirect
+                    return HttpResponseRedirect(signed_url)
+            if photo.image:
+                return HttpResponse(bytes(photo.image), content_type=photo.content_type or "image/jpeg")
+            return success_response(
+                {"detail": "Parcel photo content not available."},
+                message="Not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
         if not _user_can_driver_transition(request.user, booking, Booking.BookingState.TRIP_STARTED):
             return success_response(
@@ -227,7 +244,13 @@ class BookingViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
         return success_response(
-            {"booking_id": str(booking.id), "kind": photo.kind, "byte_size": photo.byte_size},
+            {
+                "booking_id": str(booking.id),
+                "kind": photo.kind,
+                "byte_size": photo.byte_size,
+                "file_key": photo.file_key,
+                "image_url": photo.image_url,
+            },
             message="Parcel photo saved",
         )
 

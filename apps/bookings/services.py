@@ -269,6 +269,8 @@ MAX_PARCEL_PHOTO_BYTES = 6 * 1024 * 1024
 
 
 def save_booking_parcel_photo(*, booking: Booking, kind: str, image_bytes: bytes, content_type: str):
+    import time
+    from apps.common.r2 import is_r2_configured, upload_bytes_to_r2, get_public_url
     from .models import BookingParcelPhoto
 
     if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP}:
@@ -280,14 +282,37 @@ def save_booking_parcel_photo(*, booking: Booking, kind: str, image_bytes: bytes
     content_type = (content_type or "image/jpeg").split(";")[0].strip().lower()
     if not content_type.startswith("image/"):
         raise ValueError("Parcel photo must be an image.")
+
+    ext = "webp" if "webp" in content_type else ("png" if "png" in content_type else "jpg")
+    r2_key = f"parcels/{booking.id}/{kind}_{int(time.time())}.{ext}"
+
+    file_key = ""
+    image_url = ""
+    fallback_image = None
+
+    if is_r2_configured():
+        uploaded_key = upload_bytes_to_r2(r2_key, image_bytes, content_type)
+        if uploaded_key:
+            file_key = uploaded_key
+            image_url = get_public_url(uploaded_key)
+        else:
+            fallback_image = image_bytes
+    else:
+        fallback_image = image_bytes
+
+    defaults = {
+        "content_type": content_type[:64],
+        "byte_size": len(image_bytes),
+        "file_key": file_key,
+        "image_url": image_url,
+    }
+    if fallback_image is not None or not file_key:
+        defaults["image"] = fallback_image
+
     photo, _created = BookingParcelPhoto.objects.update_or_create(
         booking=booking,
         kind=kind,
-        defaults={
-            "image": image_bytes,
-            "content_type": content_type[:64],
-            "byte_size": len(image_bytes),
-        },
+        defaults=defaults,
     )
     return photo
 

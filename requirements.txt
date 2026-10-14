@@ -18,3 +18,4 @@ websockets>=12.0
 wsproto>=1.2
 python-socketio>=5.11
 firebase-admin>=6.5.0
+boto3>=1.34.0

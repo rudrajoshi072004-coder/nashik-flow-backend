@@ -30,10 +30,20 @@ class Booking(TimeStampedUUIDModel, SoftDeleteModel):
         INSTANT = "instant", "Instant"
         SCHEDULED = "scheduled", "Scheduled"
 
+    class TripType(models.TextChoices):
+        WITHIN_CITY = "within_city", "Within City"
+        OUTSTATION = "outstation", "Outstation"
+
     customer = models.ForeignKey("users.User", related_name="customer_bookings", on_delete=models.PROTECT)
     driver = models.ForeignKey("drivers.DriverProfile", related_name="bookings", on_delete=models.PROTECT, null=True, blank=True)
     vehicle_category = models.ForeignKey("vehicle_categories.VehicleCategory", on_delete=models.PROTECT)
     booking_type = models.CharField(max_length=32, choices=BookingType.choices, default=BookingType.INSTANT)
+    trip_type = models.CharField(
+        max_length=32,
+        choices=TripType.choices,
+        default=TripType.WITHIN_CITY,
+        db_index=True,
+    )
     state = models.CharField(max_length=64, choices=BookingState.choices, default=BookingState.DRAFT, db_index=True)
     pickup_location = models.PointField(srid=4326, geography=True)
     drop_location = models.PointField(srid=4326, geography=True)

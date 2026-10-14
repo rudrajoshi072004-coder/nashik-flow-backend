@@ -5,6 +5,8 @@ from django.contrib.gis.geos import Point
 from rest_framework import serializers
 
 from .models import Booking, BookingParcelPhoto, BookingStop
+from apps.pricing.trip_pricing import compute_fare_quote
+from apps.service_zones.services import resolve_service_zone
 
 
 def _parcel_photo_flag(instance, attr: str, kind: str) -> bool:
@@ -57,11 +59,18 @@ class BookingSerializer(serializers.ModelSerializer):
     pickup_lng = serializers.FloatField(write_only=True, required=False)
     drop_lat = serializers.FloatField(write_only=True, required=False)
     drop_lng = serializers.FloatField(write_only=True, required=False)
+    city = serializers.CharField(required=False, default="Nashik", max_length=64, write_only=True)
 
     class Meta:
         model = Booking
         fields = "__all__"
-        read_only_fields = ("customer", "estimated_distance_km", "estimated_duration_min", "estimated_fare")
+        read_only_fields = (
+            "customer",
+            "estimated_distance_km",
+            "estimated_duration_min",
+            "estimated_fare",
+            "service_zone",
+        )
         extra_kwargs = {
             # Mobile sends pickup/drop as lat/lng; these are derived in create()
             "pickup_location": {"required": False},
@@ -96,6 +105,7 @@ class BookingSerializer(serializers.ModelSerializer):
         pickup_lng = validated_data.pop("pickup_lng")
         drop_lat = validated_data.pop("drop_lat")
         drop_lng = validated_data.pop("drop_lng")
+        city = validated_data.pop("city", "Nashik")
 
         if not (validated_data.get("pickup_address_text") or "").strip():
             validated_data["pickup_address_text"] = f"Pickup: {pickup_lat:.5f}, {pickup_lng:.5f}"
@@ -105,23 +115,30 @@ class BookingSerializer(serializers.ModelSerializer):
         validated_data["pickup_location"] = Point(float(pickup_lng), float(pickup_lat), srid=4326)
         validated_data["drop_location"] = Point(float(drop_lng), float(drop_lat), srid=4326)
 
-        distance_km = _haversine_km(pickup_lat, pickup_lng, drop_lat, drop_lng)
-
         category = validated_data["vehicle_category"]
-        from apps.pricing.services import (
-            calculate_estimated_fare,
-            fare_breakdown_payload,
-            resolve_rates_for_category,
+        requested_trip_type = validated_data.get("trip_type") or None
+        requires_helper = bool(validated_data.get("requires_helper"))
+
+        quote = compute_fare_quote(
+            category=category,
+            pickup_lat=pickup_lat,
+            pickup_lng=pickup_lng,
+            drop_lat=drop_lat,
+            drop_lng=drop_lng,
+            city=city,
+            requested_trip_type=requested_trip_type,
+            requires_helper=requires_helper,
         )
 
-        city = "Nashik"
-        rates = resolve_rates_for_category(category, city=city)
-        estimated_fare = calculate_estimated_fare(rates, distance_km)
+        validated_data["trip_type"] = quote.trip_type
+        validated_data["estimated_distance_km"] = quote.distance_km
+        validated_data["estimated_duration_min"] = quote.estimated_duration_min
+        validated_data["estimated_fare"] = quote.estimated_fare
+        validated_data["pricing_breakdown"] = quote.breakdown
 
-        validated_data["estimated_distance_km"] = distance_km
-        validated_data["estimated_duration_min"] = int(max(10, float(distance_km) * 4))
-        validated_data["estimated_fare"] = estimated_fare
-        validated_data["pricing_breakdown"] = fare_breakdown_payload(rates, distance_km, estimated_fare)
+        zone = resolve_service_zone(city)
+        if zone:
+            validated_data["service_zone"] = zone
 
         booking = super().create(validated_data)
         for stop in stops_data:
@@ -175,3 +192,9 @@ class FareEstimateSerializer(serializers.Serializer):
     drop_lng = serializers.FloatField()
     city = serializers.CharField(required=False, default="Nashik", max_length=64)
     requires_helper = serializers.BooleanField(default=False)
+    trip_type = serializers.ChoiceField(
+        choices=Booking.TripType.choices,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+    )

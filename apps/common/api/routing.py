@@ -13,7 +13,7 @@ OSRM_BASES = (
 )
 
 
-def _fetch_osrm_route(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float) -> list[dict]:
+def _fetch_osrm_route_payload(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float) -> dict | None:
     path = (
         f"/route/v1/driving/{origin_lng},{origin_lat};{dest_lng},{dest_lat}"
         "?overview=simplified&geometries=geojson"
@@ -25,17 +25,54 @@ def _fetch_osrm_route(origin_lng: float, origin_lat: float, dest_lng: float, des
                 url,
                 headers={"User-Agent": "nashik-logistics-backend/1.0", "Accept": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             if payload.get("code") != "Ok":
                 continue
-            coords = payload["routes"][0]["geometry"]["coordinates"]
+            routes = payload.get("routes")
+            if not routes or not isinstance(routes, list):
+                continue
+            route = routes[0]
+            coords = route.get("geometry", {}).get("coordinates")
             if not isinstance(coords, list) or len(coords) < 2:
                 continue
-            return [{"lat": float(c[1]), "lng": float(c[0])} for c in coords]
-        except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return route
+        except (urllib.error.URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError, Exception):
             continue
-    return []
+    return None
+
+
+def fetch_osrm_route_metrics(
+    origin_lng: float,
+    origin_lat: float,
+    dest_lng: float,
+    dest_lat: float,
+) -> dict | None:
+    """Return driving distance/duration from OSRM, or None if unavailable."""
+    route = _fetch_osrm_route_payload(origin_lng, origin_lat, dest_lng, dest_lat)
+    if route is None:
+        return None
+    try:
+        distance_m = float(route.get("distance") or 0)
+        duration_s = float(route.get("duration") or 0)
+        if distance_m <= 0:
+            return None
+        coords = route.get("geometry", {}).get("coordinates", [])
+        points = [{"lat": float(c[1]), "lng": float(c[0])} for c in coords if len(c) >= 2]
+        return {
+            "distance_km": distance_m / 1000.0,
+            "duration_min": max(1, int(round(duration_s / 60.0))),
+            "points": points,
+        }
+    except Exception:
+        return None
+
+
+def _fetch_osrm_route(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float) -> list[dict]:
+    metrics = fetch_osrm_route_metrics(origin_lng, origin_lat, dest_lng, dest_lat)
+    if metrics is None:
+        return []
+    return metrics["points"]
 
 
 class DrivingRouteView(APIView):

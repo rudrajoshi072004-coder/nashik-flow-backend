@@ -4,6 +4,7 @@ from django.db.models import Exists, OuterRef
 from django.http import HttpResponse
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.common.api.responses import success_response
 from apps.common.permissions.rbac import IsAdminRole, IsCustomerOrAdmin, IsDriverOrAdmin
@@ -62,7 +63,7 @@ class TripEventSerializer(serializers.ModelSerializer):
 class BookingViewSet(viewsets.ModelViewSet):
     queryset = Booking.objects.select_related("customer", "driver", "vehicle_category", "service_zone").all()
     serializer_class = BookingSerializer
-    filterset_fields = ("state", "booking_type", "vehicle_category", "service_zone")
+    filterset_fields = ("state", "booking_type", "trip_type", "vehicle_category", "service_zone", "driver")
     search_fields = ("id", "customer__phone", "driver__user__phone", "pickup_address_text", "drop_address_text")
     ordering_fields = ("created_at", "scheduled_at", "estimated_fare")
 
@@ -122,7 +123,10 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer = FareEstimateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        category = VehicleCategory.objects.get(id=data["vehicle_category_id"], is_deleted=False, active=True)
+        try:
+            category = VehicleCategory.objects.get(id=data["vehicle_category_id"], is_deleted=False, active=True)
+        except VehicleCategory.DoesNotExist:
+            raise DRFValidationError({"vehicle_category_id": "Vehicle category not found or inactive."})
         from apps.pricing.trip_pricing import compute_fare_quote
 
         city = data.get("city") or "Nashik"

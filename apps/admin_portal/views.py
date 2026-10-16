@@ -220,6 +220,7 @@ def _serialize_driver_profile(profile, category_names: dict[str, str] | None = N
         "vehicle_body_type": vehicle_body,
         "fuel_type": profile.fuel_type or "",
         "will_drive_vehicle": profile.will_drive_vehicle,
+        "accepts_outstation": getattr(profile, "accepts_outstation", True),
         "rating": str(profile.rating_avg or "0"),
         "total_trips": profile.total_trips or 0,
         "wallet_balance": wallet_balance,

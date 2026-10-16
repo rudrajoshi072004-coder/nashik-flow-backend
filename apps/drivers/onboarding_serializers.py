@@ -24,6 +24,7 @@ class DriverOnboardingSubmitSerializer(serializers.Serializer):
     three_wheeler_body_type = serializers.CharField(required=False, allow_blank=True, max_length=32)
     fuel_type = serializers.CharField(required=False, allow_blank=True, max_length=16)
     operation_city = serializers.CharField(max_length=64)
+    accepts_outstation = serializers.BooleanField(required=False, default=True)
     documents = DriverOnboardingDocumentSerializer(required=False)
 
     def validate_driver_phone(self, value: str) -> str:

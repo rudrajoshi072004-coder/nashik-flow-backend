@@ -27,6 +27,11 @@ class DriverProfile(TimeStampedUUIDModel, SoftDeleteModel):
     three_wheeler_body_type = models.CharField(max_length=32, blank=True, default="")
     fuel_type = models.CharField(max_length=16, blank=True, default="")
     operation_city = models.CharField(max_length=64, blank=True, default="")
+    accepts_outstation = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Whether 3W/4W driver is willing to accept outstation trips outside city boundaries.",
+    )
 
     def public_display_name(self) -> str:
         """Name shown to the customer. Never fall back to the phone number."""

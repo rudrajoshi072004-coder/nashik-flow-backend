@@ -157,6 +157,8 @@ def _eligible_profiles_from_redis_ids(
         q = q.filter(_category_match_q(booking))
     if require_active_vehicle:
         q = q.filter(vehicles__status=Vehicle.Status.ACTIVE)
+    if getattr(booking, "trip_type", None) == Booking.TripType.OUTSTATION:
+        q = q.filter(accepts_outstation=True)
     profiles = {str(p.id): p for p in q.distinct()}
     rows: list[tuple[DriverProfile, Any]] = []
     for did, dist_km in driver_distances:
@@ -217,6 +219,9 @@ def find_drivers_in_ring(
 
         if require_active_vehicle:
             q = q.filter(driver__vehicles__status=Vehicle.Status.ACTIVE)
+
+        if getattr(booking, "trip_type", None) == Booking.TripType.OUTSTATION:
+            q = q.filter(driver__accepts_outstation=True)
             
         if inner <= 0:
             q = q.filter(location__distance_lte=(pt, D(km=outer)))
@@ -271,18 +276,22 @@ def _busy_driver_ids() -> list:
 
 def find_online_profiles_without_live_location(
     *,
+    booking: Booking | None = None,
     exclude_driver_ids: list | None = None,
     limit: int = FALLBACK_ANY_ONLINE_MAX,
 ) -> list[DriverProfile]:
     """Drivers marked online on the server but with no GPS row yet (common on mobile app reopen)."""
     exclude_driver_ids = [str(x) for x in (exclude_driver_ids or [])]
     located_ids = DriverLiveLocation.objects.values_list("driver_id", flat=True)
-    return list(
+    q = (
         DriverProfile.objects.filter(is_online=True, is_deleted=False)
         .exclude(id__in=exclude_driver_ids)
         .exclude(id__in=_busy_driver_ids())
-        .exclude(id__in=located_ids)[:limit]
+        .exclude(id__in=located_ids)
     )
+    if booking and getattr(booking, "trip_type", None) == Booking.TripType.OUTSTATION:
+        q = q.filter(accepts_outstation=True)
+    return list(q[:limit])
 
 
 def find_any_online_drivers(
@@ -322,15 +331,17 @@ def find_any_online_drivers(
         _base_live_qs(strict_kyc=False)
         .exclude(driver_id__in=exclude_driver_ids)
         .annotate(distance_m=Distance("location", pt))
-        .order_by("distance_m")
-        .distinct()
     )
+    if getattr(booking, "trip_type", None) == Booking.TripType.OUTSTATION:
+        qs = qs.filter(driver__accepts_outstation=True)
+    qs = qs.order_by("distance_m").distinct()
     for row in qs[:FALLBACK_ANY_ONLINE_MAX]:
         results.append((row.driver, row.distance_m))
 
     if len(results) < FALLBACK_ANY_ONLINE_MAX:
         remaining = FALLBACK_ANY_ONLINE_MAX - len(results)
         for profile in find_online_profiles_without_live_location(
+            booking=booking,
             exclude_driver_ids=exclude_driver_ids + [str(d.id) for d, _ in results],
             limit=remaining,
         ):

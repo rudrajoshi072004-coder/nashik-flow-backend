@@ -100,6 +100,13 @@ def submit_driver_onboarding(user, data: dict) -> DriverProfile:
     profile.three_wheeler_body_type = (data.get("three_wheeler_body_type") or "").strip()[:32]
     profile.fuel_type = (data.get("fuel_type") or "").strip()[:16]
     profile.operation_city = operation_city[:64]
+    # 2W cannot do outstation trips; 3W and 4W can opt-in/out
+    if profile.vehicle_type == "2w":
+        profile.accepts_outstation = False
+    elif "accepts_outstation" in data:
+        profile.accepts_outstation = bool(data["accepts_outstation"])
+    else:
+        profile.accepts_outstation = True
     profile.onboarding_completed = True
     profile.kyc_status = DriverProfile.KYCStatus.PENDING
     profile.onboarding_submitted_at = timezone.now()

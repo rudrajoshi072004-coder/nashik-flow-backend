@@ -22,6 +22,14 @@ class DriverProfileSerializer(serializers.ModelSerializer):
     def get_display_name(self, obj: DriverProfile) -> str:
         return self.get_full_name(obj)
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # 2-wheelers cannot accept outstation trips
+        vehicle_type = attrs.get("vehicle_type") or (getattr(self.instance, "vehicle_type", "") if self.instance else "")
+        if (vehicle_type or "").strip().lower() == "2w" and attrs.get("accepts_outstation"):
+            attrs["accepts_outstation"] = False
+        return attrs
+
 
 class DriverAvailabilitySerializer(serializers.Serializer):
     is_online = serializers.BooleanField()

@@ -41,6 +41,24 @@ class VehicleCategory(TimeStampedUUIDModel, SoftDeleteModel):
         default=0,
         help_text="Amount subtracted from the outstation per-km rate on each extra distance block.",
     )
+    outstation_step_discount_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="Percentage reduced from per-km rate on each extra distance block (0-100).",
+    )
+    outstation_deadhead_multiplier = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=1.00,
+        help_text="Multiplier applied to outstation distance charge to compensate for deadhead/empty return (e.g. 1.30 to 1.40).",
+    )
+    outstation_min_per_km_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Hard floor per-km rate below which outstation rate will never drop.",
+    )
     outstation_threshold_km = models.DecimalField(
         max_digits=10,
         decimal_places=2,

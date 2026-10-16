@@ -25,6 +25,9 @@ class ResolvedRates:
     step_start_km: Decimal = OUTSTATION_STEP_START_KM
     step_km: Decimal = ZERO
     step_discount: Decimal = ZERO
+    step_discount_percent: Decimal = ZERO
+    deadhead_multiplier: Decimal = Decimal("1.00")
+    min_per_km_rate: Decimal = ZERO
     pricing_rule_id: str | None = None
 
 
@@ -35,7 +38,9 @@ def chargeable_distance_km(distance_km: Decimal, included_km: Decimal | None) ->
 
 
 def _step_enabled(rates: ResolvedRates) -> bool:
-    return (rates.step_km or ZERO) > ZERO and (rates.step_discount or ZERO) > ZERO
+    has_step = (rates.step_km or ZERO) > ZERO
+    has_discount = (rates.step_discount or ZERO) > ZERO or (rates.step_discount_percent or ZERO) > ZERO
+    return has_step and has_discount
 
 
 def per_km_rate_at(position_km: Decimal, rates: ResolvedRates) -> Decimal:
@@ -44,11 +49,27 @@ def per_km_rate_at(position_km: Decimal, rates: ResolvedRates) -> Decimal:
     if not _step_enabled(rates):
         return rate
     start = rates.step_start_km or OUTSTATION_STEP_START_KM
+    if (rates.base_fare_km or ZERO) > start:
+        start = rates.base_fare_km
     if position_km < start:
         return rate
     extra = position_km - start
     steps = (extra // rates.step_km) + 1
-    reduced = rate - (rates.step_discount * steps)
+
+    # Apply percentage discount if configured, otherwise flat currency reduction
+    if (rates.step_discount_percent or ZERO) > ZERO:
+        discount_fraction = (rates.step_discount_percent / Decimal("100")) * steps
+        factor = Decimal("1") - discount_fraction
+        reduced = rate * max(Decimal("0"), factor)
+    elif (rates.step_discount or ZERO) > ZERO:
+        reduced = rate - (rates.step_discount * steps)
+    else:
+        reduced = rate
+
+    # Enforce minimum rate floor to protect driver deadhead economics
+    if (rates.min_per_km_rate or ZERO) > ZERO:
+        reduced = max(rates.min_per_km_rate, reduced)
+
     return reduced if reduced > ZERO else ZERO
 
 
@@ -56,6 +77,8 @@ def _next_rate_boundary(position_km: Decimal, end_km: Decimal, rates: ResolvedRa
     if not _step_enabled(rates):
         return end_km
     start = rates.step_start_km or OUTSTATION_STEP_START_KM
+    if (rates.base_fare_km or ZERO) > start:
+        start = rates.base_fare_km
     if position_km < start:
         return min(start, end_km)
     extra = position_km - start
@@ -67,12 +90,13 @@ def _next_rate_boundary(position_km: Decimal, end_km: Decimal, rates: ResolvedRa
 
 
 def distance_charge(rates: ResolvedRates, distance_km: Decimal) -> Decimal:
-    """Base fare + telescopic per-km charge for billed kilometres."""
+    """Base fare + telescopic per-km charge (scaled by deadhead multiplier) for billed kilometres."""
     billed_from = rates.base_fare_km or ZERO
     if distance_km <= billed_from:
         return rates.base_fare
     total = rates.base_fare
     position = billed_from
+    dist_charge = ZERO
     while position < distance_km:
         rate = per_km_rate_at(position, rates)
         nxt = _next_rate_boundary(position, distance_km, rates)
@@ -80,9 +104,11 @@ def distance_charge(rates: ResolvedRates, distance_km: Decimal) -> Decimal:
             nxt = min(distance_km, position + (rates.step_km or Decimal("0.01")))
         if nxt <= position:
             break
-        total += (nxt - position) * rate
+        dist_charge += (nxt - position) * rate
         position = nxt
-    return total
+
+    multiplier = rates.deadhead_multiplier if (rates.deadhead_multiplier and rates.deadhead_multiplier > ZERO) else Decimal("1.00")
+    return total + (dist_charge * multiplier)
 
 
 def resolve_rates_for_category(
@@ -109,6 +135,8 @@ def resolve_outstation_rates_for_category(category: VehicleCategory) -> Resolved
     per_km = category.outstation_per_km_rate or ZERO
     if per_km <= ZERO:
         return None
+    base_fare_km = category.outstation_base_fare_km or ZERO
+    step_start = max(OUTSTATION_STEP_START_KM, base_fare_km)
     return ResolvedRates(
         base_fare=category.outstation_base_fare or ZERO,
         per_km_rate=per_km,
@@ -116,10 +144,13 @@ def resolve_outstation_rates_for_category(category: VehicleCategory) -> Resolved
         waiting_per_min=ZERO,
         surge_multiplier=Decimal("1.00"),
         source="vehicle_category_outstation",
-        base_fare_km=category.outstation_base_fare_km or ZERO,
-        step_start_km=OUTSTATION_STEP_START_KM,
+        base_fare_km=base_fare_km,
+        step_start_km=step_start,
         step_km=getattr(category, "outstation_step_km", None) or ZERO,
         step_discount=getattr(category, "outstation_step_discount", None) or ZERO,
+        step_discount_percent=getattr(category, "outstation_step_discount_percent", None) or ZERO,
+        deadhead_multiplier=getattr(category, "outstation_deadhead_multiplier", None) or Decimal("1.00"),
+        min_per_km_rate=getattr(category, "outstation_min_per_km_rate", None) or ZERO,
     )
 
 
@@ -159,6 +190,9 @@ def fare_breakdown_payload(
         "outstation_step_start_km": str(rates.step_start_km or OUTSTATION_STEP_START_KM),
         "outstation_step_km": str(rates.step_km or ZERO),
         "outstation_step_discount": str(rates.step_discount or ZERO),
+        "outstation_step_discount_percent": str(rates.step_discount_percent or ZERO),
+        "outstation_deadhead_multiplier": str(rates.deadhead_multiplier or Decimal("1.00")),
+        "outstation_min_per_km_rate": str(rates.min_per_km_rate or ZERO),
     }
     if rates.pricing_rule_id:
         payload["pricing_rule_id"] = rates.pricing_rule_id

@@ -15,6 +15,11 @@ class ServiceZone(TimeStampedUUIDModel, SoftDeleteModel):
         default=50,
         help_text="Max distance (km) for within-city trips from service center.",
     )
+    directional_sections = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="4 directional sections (north, south, east, west) with polygons, quotas, and configurations.",
+    )
 
     class Meta:
         unique_together = ("city_name", "zone_name")

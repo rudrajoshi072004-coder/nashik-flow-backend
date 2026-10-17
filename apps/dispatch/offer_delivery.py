@@ -63,3 +63,35 @@ def schedule_fcm_fallback(booking_id: str, driver_id: str, offer_payload: dict) 
         )
     except Exception:
         logger.exception("Failed to schedule FCM fallback for booking %s driver %s", booking_id, driver_id)
+
+
+def send_fcm_offer_immediate(booking_id: str, driver_profile, offer_payload: dict) -> None:
+    """Send immediate FCM push notification so driver phone alerts immediately when an order is created."""
+    import threading
+
+    def _send() -> None:
+        try:
+            token = getattr(driver_profile.user, "fcm_token", None)
+            if not token:
+                return
+            from apps.notifications.fcm import send_fcm_push
+
+            pickup = offer_payload.get("pickup_address_text") or "Pickup location"
+            drop = offer_payload.get("drop_address_text") or "Drop location"
+            fare = offer_payload.get("estimated_fare")
+            fare_str = f" • ₹{fare}" if fare else ""
+            send_fcm_push(
+                token=token,
+                title="New Order Available 🔔",
+                body=f"New Trip: {pickup} → {drop}{fare_str}. Tap to accept or deny.",
+                data={
+                    "type": "driver_offer",
+                    "booking_id": str(booking_id),
+                    **{k: str(v) for k, v in offer_payload.items() if v is not None},
+                },
+            )
+        except Exception:
+            logger.exception("Failed immediate FCM push for booking %s driver %s", booking_id, getattr(driver_profile, "id", None))
+
+    threading.Thread(target=_send, daemon=True).start()
+

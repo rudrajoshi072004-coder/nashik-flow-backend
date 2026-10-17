@@ -32,6 +32,11 @@ class DriverProfile(TimeStampedUUIDModel, SoftDeleteModel):
         db_index=True,
         help_text="Whether 3W/4W driver is willing to accept outstation trips outside city boundaries.",
     )
+    training_completed = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Whether driver has completed mandatory orientation training modules.",
+    )
 
     def public_display_name(self) -> str:
         """Name shown to the customer. Never fall back to the phone number."""

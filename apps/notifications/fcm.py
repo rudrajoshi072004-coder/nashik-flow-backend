@@ -62,7 +62,16 @@ def send_fcm_push(token: str, title: str, body: str, data: dict | None = None) -
         notification=messaging.Notification(title=title, body=body),
         data={k: str(v) for k, v in (data or {}).items()},
         token=token,
-        android=messaging.AndroidConfig(priority="high"),
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(
+                sound="default",
+                channel_id="ride_alerts",
+                default_sound=True,
+                default_vibrate_timings=True,
+                priority="max",
+            ),
+        ),
         apns=messaging.APNSConfig(
             headers={"apns-priority": "10"},
             payload=messaging.APNSPayload(aps=messaging.Aps(sound="default", badge=1)),

@@ -19,7 +19,7 @@ class DriverViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsDriverRoleOrProfile]
 
     def get_permissions(self):
-        if self.action in {"submit_onboarding", "upload_document", "list", "update_profile"}:
+        if self.action in {"submit_onboarding", "upload_document", "list", "update_profile", "complete_training"}:
             return [IsAuthenticated()]
         return super().get_permissions()
 
@@ -250,4 +250,16 @@ class DriverViewSet(viewsets.ViewSet):
         user.fcm_token = str(token)
         user.save(update_fields=["fcm_token", "updated_at"])
         return success_response({"status": "ok"}, message="FCM token saved")
+
+    @action(detail=False, methods=["post"], url_path="complete-training")
+    def complete_training(self, request):
+        profile = self.get_object()
+        if not profile:
+            return self._missing_profile_response()
+        profile.training_completed = True
+        profile.save(update_fields=["training_completed", "updated_at"])
+        return success_response(
+            DriverProfileSerializer(profile).data,
+            message="Mandatory orientation training completed successfully",
+        )
 

@@ -85,12 +85,13 @@ def _broadcast_driver_provisional_assign(*, booking: Booking, driver_profile, di
     # Drivers always join `user_<user_id>` on connect; duplicate so offers are not missed.
     broadcast_event(f"user_{driver_profile.user_id}", "driver_assigned", assignment_payload)
 
-    from .offer_delivery import register_offer_pending, schedule_fcm_fallback, try_assign_driver
+    from .offer_delivery import register_offer_pending, schedule_fcm_fallback, send_fcm_offer_immediate, try_assign_driver
 
     driver_id = str(driver_profile.id)
     booking_id = str(booking.id)
     if try_assign_driver(booking_id, driver_id):
         register_offer_pending(booking_id, driver_id)
+        send_fcm_offer_immediate(booking_id, driver_profile, assignment_payload)
         schedule_fcm_fallback(booking_id, driver_id, assignment_payload)
 
 

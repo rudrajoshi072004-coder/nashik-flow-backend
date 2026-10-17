@@ -165,20 +165,36 @@ def _serialize_driver_profile(profile, category_names: dict[str, str] | None = N
             continue
         raw_key = str(doc.file_key or "").strip()
         doc_url = None
-        if raw_key.startswith("http://") or raw_key.startswith("https://") or raw_key.startswith("data:"):
+        has_binary = bool(getattr(doc, "image", None))
+
+        if has_binary:
+            doc_url = f"/api/v1/admin/portal/drivers/{profile.id}/documents/{doc.id}/file/"
+        elif raw_key.startswith("http://") or raw_key.startswith("https://") or raw_key.startswith("data:"):
             doc_url = raw_key
-        elif raw_key:
-            from apps.common.r2 import generate_presigned_url
-            doc_url = generate_presigned_url(raw_key, expires_in=1800)
+        elif raw_key and not raw_key.startswith("file://"):
+            from apps.common.r2 import generate_presigned_url, is_r2_configured
+            if is_r2_configured():
+                doc_url = generate_presigned_url(raw_key, expires_in=3600)
+            if not doc_url:
+                doc_url = f"/api/v1/admin/portal/drivers/{profile.id}/documents/{doc.id}/file/"
+
+        # Never dump raw device paths like file:///data/user/0/... into the number field
+        doc_number = (getattr(doc, "document_number", "") or "").strip()
+        if not doc_number and raw_key and not raw_key.startswith("file://") and not raw_key.startswith("drivers/"):
+            doc_number = raw_key
+        if not doc_number:
+            doc_number = "—"
 
         documents.append(
             {
                 "id": str(doc.id),
                 "type": doc.get_document_type_display() if hasattr(doc, "get_document_type_display") else doc.document_type,
-                "number": raw_key or "—",
+                "document_type": doc.document_type,
+                "number": doc_number,
                 "file_key": raw_key,
                 "file_url": doc_url,
                 "url": doc_url,
+                "is_device_cache": raw_key.startswith("file://"),
                 "status": _doc_status_label(doc.status),
                 "expiry": "—",
             }
@@ -509,3 +525,83 @@ class PortalDriverDetailView(APIView):
 
         row = _serialize_driver_profile(profile, category_names)
         return _ok(row, message="Driver updated")
+
+
+class PortalDriverDocumentFileView(APIView):
+    """Serve or stream driver document file."""
+
+    permission_classes = [IsPortalAdmin]
+
+    def get(self, request, driver_id, doc_id):
+        from django.http import HttpResponse, HttpResponseRedirect
+        from apps.driver_documents.models import DriverDocument
+
+        doc = DriverDocument.objects.filter(
+            id=doc_id, driver_id=driver_id, is_deleted=False
+        ).first()
+        if not doc:
+            return HttpResponse(b"Document not found", status=404)
+
+        raw_key = str(doc.file_key or "").strip()
+        if raw_key.startswith("http://") or raw_key.startswith("https://"):
+            return HttpResponseRedirect(raw_key)
+
+        from apps.common.r2 import generate_presigned_url, is_r2_configured
+        if is_r2_configured() and raw_key and not raw_key.startswith("file://"):
+            signed = generate_presigned_url(raw_key, expires_in=1800)
+            if signed:
+                return HttpResponseRedirect(signed)
+
+        if doc.image:
+            return HttpResponse(bytes(doc.image), content_type=doc.content_type or "image/jpeg")
+
+        return HttpResponse(b"Document file not available on server", status=404)
+
+
+class PortalDriverDocumentReviewView(APIView):
+    """Approve or reject individual driver document from admin panel."""
+
+    permission_classes = [IsPortalAdmin]
+
+    def patch(self, request, driver_id, doc_id):
+        from django.utils import timezone
+        from apps.driver_documents.models import DriverDocument
+        from apps.drivers.models import DriverProfile
+
+        doc = DriverDocument.objects.filter(
+            id=doc_id, driver_id=driver_id, is_deleted=False
+        ).first()
+        if not doc:
+            return _fail("Document not found", code=status.HTTP_404_NOT_FOUND)
+
+        payload = request.data if isinstance(request.data, dict) else {}
+        new_status = str(payload.get("status") or "").strip().lower()
+        if new_status not in {
+            DriverDocument.Status.APPROVED,
+            DriverDocument.Status.REJECTED,
+            DriverDocument.Status.PENDING,
+        }:
+            return _fail("Invalid status. Allowed: approved, rejected, pending")
+
+        doc.status = new_status
+        doc.reviewed_by = request.user
+        doc.reviewed_at = timezone.now()
+        if "rejection_reason" in payload:
+            doc.rejection_reason = str(payload.get("rejection_reason") or "")
+        doc.save(update_fields=["status", "reviewed_by", "reviewed_at", "rejection_reason", "updated_at"])
+
+        profile = DriverProfile.objects.filter(pk=driver_id).first()
+        if profile and new_status == DriverDocument.Status.APPROVED:
+            pending_docs = profile.documents.filter(
+                is_deleted=False, status=DriverDocument.Status.PENDING
+            ).exists()
+            if not pending_docs:
+                profile.kyc_status = DriverProfile.KYCStatus.APPROVED
+                profile.save(update_fields=["kyc_status", "updated_at"])
+
+        return _ok({
+            "id": str(doc.id),
+            "status": _doc_status_label(doc.status),
+            "rejection_reason": doc.rejection_reason,
+        }, message="Document updated")
+

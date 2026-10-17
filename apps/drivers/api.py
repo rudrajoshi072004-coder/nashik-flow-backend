@@ -120,24 +120,21 @@ class DriverViewSet(viewsets.ViewSet):
         file_key = r2_key
         if is_r2_configured():
             uploaded_key = upload_bytes_to_r2(r2_key, file_bytes, content_type)
-            if not uploaded_key:
-                return success_response(
-                    {"detail": "Failed to store document in Cloudflare R2."},
-                    message="Storage failure",
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            file_key = uploaded_key
+            if uploaded_key:
+                file_key = uploaded_key
 
         doc_record, _ = DriverDocument.objects.update_or_create(
             driver=profile,
             document_type=doc_type,
             defaults={
                 "file_key": file_key,
+                "image": file_bytes,
+                "content_type": content_type,
                 "status": DriverDocument.Status.PENDING,
             },
         )
 
-        preview_url = generate_presigned_url(file_key, expires_in=1800) if is_r2_configured() else None
+        preview_url = generate_presigned_url(file_key, expires_in=1800) if is_r2_configured() else f"/api/v1/admin/portal/drivers/{profile.id}/documents/{doc_record.id}/file/"
 
         return success_response(
             {

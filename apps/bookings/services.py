@@ -250,6 +250,17 @@ def transition_booking_state(
         if booking.driver_id:
             broadcast_event(f"driver_{booking.driver_id}", lifecycle_event, event_payload)
 
+    if to_state == Booking.BookingState.COMPLETED and booking.driver_id:
+        try:
+            from apps.wallets.services import record_trip_wallet_settlement
+
+            has_online_payment = booking.payments.filter(status="success").exists()
+            pm = "online" if has_online_payment else (payload.get("payment_method") or "cash")
+            record_trip_wallet_settlement(booking=booking, payment_method=pm)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Driver wallet settlement failed for booking %s: %s", booking.id, exc)
+
     return TransitionResult(str(booking.id), booking.state, event.sequence)
 
 

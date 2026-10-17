@@ -74,7 +74,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         if action in {"create"}:
             # Drivers (and other roles) may book deliveries on the customer app with the same phone.
             return [IsAuthenticated()]
-        if action in {"list", "retrieve", "timeline", "parcel_photo"}:
+        if action in {"list", "retrieve", "timeline", "parcel_photo", "update_destination"}:
             return [IsAuthenticated()]
         if action in {"state_transition"}:
             return [IsAuthenticated()]
@@ -267,3 +267,101 @@ class BookingViewSet(viewsets.ModelViewSet):
         booking = self.get_object()
         events = booking.trip_events.all()
         return success_response(TripEventSerializer(events, many=True).data)
+
+    @action(detail=True, methods=["patch", "post"], url_path="update-destination")
+    def update_destination(self, request, pk=None):
+        booking = self.get_object()
+        terminal_states = {
+            Booking.BookingState.COMPLETED,
+            Booking.BookingState.CANCELLED_BY_CUSTOMER,
+            Booking.BookingState.CANCELLED_BY_DRIVER,
+            Booking.BookingState.CANCELLED_BY_ADMIN,
+            Booking.BookingState.FAILED,
+            Booking.BookingState.REFUNDED,
+        }
+        if booking.state in terminal_states:
+            return success_response(
+                {"detail": "Cannot update destination on a finished or cancelled booking."},
+                message="Bad Request",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        drop_lat = request.data.get("drop_lat")
+        drop_lng = request.data.get("drop_lng")
+        drop_address = request.data.get("drop_address_text")
+
+        pickup_lat = request.data.get("pickup_lat")
+        pickup_lng = request.data.get("pickup_lng")
+        pickup_address = request.data.get("pickup_address_text")
+
+        # In-transit guard: if trip is already in transit, pickup cannot be moved
+        in_transit_states = {
+            Booking.BookingState.TRIP_STARTED,
+            Booking.BookingState.IN_TRANSIT,
+            Booking.BookingState.NEARING_DROP,
+        }
+        if (pickup_lat is not None or pickup_lng is not None) and booking.state in in_transit_states:
+            return success_response(
+                {"detail": "Parcel is already picked up. Only drop location can be modified in transit."},
+                message="Bad Request",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from django.contrib.gis.geos import Point
+        from apps.pricing.trip_pricing import compute_fare_quote
+        from apps.trip_events.services import broadcast_event
+
+        cur_pickup_lat = float(pickup_lat) if pickup_lat is not None else booking.pickup_location.y
+        cur_pickup_lng = float(pickup_lng) if pickup_lng is not None else booking.pickup_location.x
+        cur_drop_lat = float(drop_lat) if drop_lat is not None else booking.drop_location.y
+        cur_drop_lng = float(drop_lng) if drop_lng is not None else booking.drop_location.x
+
+        quote = compute_fare_quote(
+            category=booking.vehicle_category,
+            pickup_lat=cur_pickup_lat,
+            pickup_lng=cur_pickup_lng,
+            drop_lat=cur_drop_lat,
+            drop_lng=cur_drop_lng,
+            city="Nashik",
+            requested_trip_type=booking.trip_type,
+            requires_helper=booking.requires_helper,
+        )
+
+        booking.estimated_distance_km = quote.distance_km
+        booking.estimated_duration_min = quote.estimated_duration_min
+        booking.estimated_fare = quote.estimated_fare
+        booking.pricing_breakdown = quote.breakdown
+
+        if drop_lat is not None and drop_lng is not None:
+            booking.drop_location = Point(float(drop_lng), float(drop_lat), srid=4326)
+            if drop_address:
+                booking.drop_address_text = str(drop_address).strip()
+
+        if pickup_lat is not None and pickup_lng is not None:
+            booking.pickup_location = Point(float(pickup_lng), float(pickup_lat), srid=4326)
+            if pickup_address:
+                booking.pickup_address_text = str(pickup_address).strip()
+
+        booking.save()
+
+        update_payload = {
+            "booking_id": str(booking.id),
+            "drop_lat": booking.drop_location.y,
+            "drop_lng": booking.drop_location.x,
+            "drop_address_text": booking.drop_address_text,
+            "pickup_lat": booking.pickup_location.y,
+            "pickup_lng": booking.pickup_location.x,
+            "pickup_address_text": booking.pickup_address_text,
+            "estimated_fare": str(booking.estimated_fare),
+            "estimated_distance_km": str(booking.estimated_distance_km),
+            "message": "Trip route updated by customer",
+        }
+
+        broadcast_event(f"booking_{booking.id}", "booking_route_updated", update_payload)
+        broadcast_event(f"user_{booking.customer_id}", "booking_route_updated", update_payload)
+        if booking.driver_id:
+            broadcast_event(f"driver_{booking.driver_id}", "booking_route_updated", update_payload)
+            broadcast_event(f"user_{booking.driver.user_id}", "booking_route_updated", update_payload)
+
+        return success_response(update_payload, message="Destination updated successfully")
+

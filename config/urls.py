@@ -12,6 +12,12 @@ from apps.customers.api import CustomerViewSet
 from apps.dispatch.api import DispatchViewSet
 from apps.drivers.api import DriverViewSet
 from apps.fare_rules.api import FareRuleViewSet
+from apps.payments.api import (
+    BookingPaymentQrView,
+    PaymentViewSet,
+    RazorpayOrdersView,
+    RazorpayWebhookView,
+)
 from apps.payouts.api import PayoutViewSet
 from apps.pricing.api import PricingRuleViewSet
 from apps.service_zones.api import ServiceZoneViewSet
@@ -39,6 +45,7 @@ router.register(r"tracking/driver-locations", DriverLiveLocationViewSet, basenam
 router.register(r"wallets", WalletViewSet, basename="wallets")
 router.register(r"wallet-transactions", WalletTransactionViewSet, basename="wallet-transactions")
 router.register(r"payouts", PayoutViewSet, basename="payouts")
+router.register(r"payments", PaymentViewSet, basename="payments")
 router.register(r"support-tickets", SupportTicketViewSet, basename="support-tickets")
 router.register(r"admin/ops", AdminOpsViewSet, basename="admin-ops")
 router.register(r"admin/audit-logs", AdminAuditLogViewSet, basename="admin-audit-logs")
@@ -53,5 +60,8 @@ urlpatterns = [
     path("api/v1/admin/portal/", include("apps.admin_portal.urls")),
     path("api/v1/health", HealthCheckView.as_view(), name="health-check"),
     path("api/v1/routing/driving-route/", DrivingRouteView.as_view(), name="driving-route"),
+    path("api/v1/payments/razorpay/orders/", RazorpayOrdersView.as_view(), name="razorpay-orders"),
+    path("api/v1/payments/razorpay/webhook/", RazorpayWebhookView.as_view(), name="razorpay-webhook"),
+    path("api/v1/bookings/<uuid:booking_id>/payment-qr/", BookingPaymentQrView.as_view(), name="booking-payment-qr"),
     path("api/v1/", include(router.urls)),
 ]

@@ -6,7 +6,16 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from apps.common.api.idempotency import (
+    check_and_set_idempotency_lock,
+    generate_dedupe_fingerprint,
+    get_cached_idempotency_response,
+    get_idempotency_key,
+    release_idempotency_lock,
+    store_idempotency_response,
+)
 from apps.common.api.responses import success_response
+from apps.common.api.throttling import FareEstimateRateThrottle
 from apps.common.permissions.rbac import IsAdminRole, IsCustomerOrAdmin, IsDriverOrAdmin
 from apps.trip_events.models import TripEvent
 from apps.vehicle_categories.models import VehicleCategory
@@ -93,6 +102,40 @@ class BookingViewSet(viewsets.ModelViewSet):
             ),
         )
 
+    def create(self, request, *args, **kwargs):
+        idempotency_key = get_idempotency_key(request)
+        if not idempotency_key:
+            # Automatic deduplication for rapid identical clicks (within 10s)
+            fingerprint = generate_dedupe_fingerprint(
+                user_id=request.user.id if request.user.is_authenticated else "anon",
+                path=request.path,
+                payload=request.data,
+            )
+            idempotency_key = f"auto:{fingerprint}"
+
+        cached = get_cached_idempotency_response(idempotency_key)
+        if cached is not None:
+            from rest_framework.response import Response
+            return Response(cached["data"], status=cached["status"], headers={"X-Cache-Lookup": "HIT"})
+
+        if not check_and_set_idempotency_lock(idempotency_key):
+            return success_response(
+                {"detail": "Request currently processing, please wait."},
+                message="Processing",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        try:
+            response = super().create(request, *args, **kwargs)
+            if response.status_code in {status.HTTP_200_OK, status.HTTP_201_CREATED}:
+                store_idempotency_response(idempotency_key, response.data, response.status_code, expiry=60)
+            else:
+                release_idempotency_lock(idempotency_key)
+            return response
+        except Exception:
+            release_idempotency_lock(idempotency_key)
+            raise
+
     def perform_create(self, serializer):
         booking = serializer.save(customer=self.request.user, state=Booking.BookingState.PENDING_QUOTE)
         bid = str(booking.id)
@@ -118,6 +161,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         url_path="fare-estimate",
         permission_classes=[AllowAny],
         authentication_classes=[],
+        throttle_classes=[FareEstimateRateThrottle],
     )
     def fare_estimate(self, request):
         serializer = FareEstimateSerializer(data=request.data)

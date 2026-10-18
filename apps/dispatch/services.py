@@ -263,7 +263,10 @@ def mark_no_driver_available(*, booking: Booking) -> None:
         threading.Thread(target=_fail_later, daemon=True).start()
         return
     booking.state = Booking.BookingState.FAILED
-    booking.save(update_fields=["state", "updated_at"])
+    from .offer_delivery import release_driver_lock
+    for did in get_notified_driver_ids(booking=booking):
+        release_driver_lock(str(did))
+
     record_trip_event(
         booking=booking,
         event_type="no_driver_found",
@@ -318,13 +321,35 @@ def _broadcast_customer_driver_assigned(*, booking: Booking) -> None:
 def cancel_pending_offers_for_others(
     *, booking: Booking, winning_driver_id: str, candidate_driver_ids: list[str] | None = None
 ) -> None:
+    from .offer_delivery import release_driver_lock
+
     cands = [d for d in (candidate_driver_ids or get_notified_driver_ids(booking=booking)) if str(d) != str(winning_driver_id)]
     for did in cands:
+        release_driver_lock(str(did))
         broadcast_event(
             f"driver_{did}",
             "ride_request_cancelled",
             {"booking_id": str(booking.id)},
         )
+
+
+def handle_driver_declined_offer(*, booking: Booking, driver_profile) -> None:
+    """Immediately free driver lock when they reject/dismiss an offer."""
+    from .offer_delivery import release_driver_lock
+
+    did = str(driver_profile.id)
+    release_driver_lock(did)
+    record_trip_event(
+        booking=booking,
+        event_type="driver_declined_offer",
+        actor_driver=driver_profile,
+        payload={"booking_id": str(booking.id), "driver_id": did},
+    )
+    broadcast_event(
+        f"driver_{did}",
+        "ride_request_cancelled",
+        {"booking_id": str(booking.id), "reason": "declined_by_driver"},
+    )
 
 
 def on_driver_won_ride(*, booking: Booking, winning_driver_id: str) -> None:

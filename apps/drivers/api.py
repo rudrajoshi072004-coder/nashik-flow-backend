@@ -7,6 +7,7 @@ from apps.bookings.models import Booking
 from apps.bookings.querysets import bookings_queryset_for_driver_user
 from apps.bookings.serializers import BookingSerializer
 from apps.common.api.responses import success_response
+from apps.common.api.throttling import DriverLocationRateThrottle
 from apps.common.permissions.rbac import IsDriverRoleOrProfile
 from apps.users.models import User
 from .models import DriverProfile
@@ -158,7 +159,7 @@ class DriverViewSet(viewsets.ViewSet):
         serializer.save()
         return success_response(serializer.data, message="Driver profile updated")
 
-    @action(detail=False, methods=["post"], url_path="location")
+    @action(detail=False, methods=["post"], url_path="location", throttle_classes=[DriverLocationRateThrottle])
     def post_location(self, request):
         """REST fallback when WebSocket location events are delayed (common on mobile)."""
         serializer = DriverLocationSerializer(data=request.data)

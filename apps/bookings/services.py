@@ -24,10 +24,26 @@ VALID_TRANSITIONS = {
         Booking.BookingState.CANCELLED_BY_CUSTOMER,
         Booking.BookingState.FAILED,
     },
-    Booking.BookingState.DRIVER_ASSIGNED: {Booking.BookingState.DRIVER_ACCEPTED, Booking.BookingState.SEARCHING_DRIVER},
-    Booking.BookingState.DRIVER_ACCEPTED: {Booking.BookingState.DRIVER_ARRIVING, Booking.BookingState.CANCELLED_BY_DRIVER},
-    Booking.BookingState.DRIVER_ARRIVING: {Booking.BookingState.DRIVER_ARRIVED, Booking.BookingState.CANCELLED_BY_DRIVER},
-    Booking.BookingState.DRIVER_ARRIVED: {Booking.BookingState.PICKUP_OTP_PENDING},
+    Booking.BookingState.DRIVER_ASSIGNED: {
+        Booking.BookingState.DRIVER_ACCEPTED,
+        Booking.BookingState.SEARCHING_DRIVER,
+        Booking.BookingState.CANCELLED_BY_CUSTOMER,
+    },
+    Booking.BookingState.DRIVER_ACCEPTED: {
+        Booking.BookingState.DRIVER_ARRIVING,
+        Booking.BookingState.CANCELLED_BY_DRIVER,
+        Booking.BookingState.CANCELLED_BY_CUSTOMER,
+    },
+    Booking.BookingState.DRIVER_ARRIVING: {
+        Booking.BookingState.DRIVER_ARRIVED,
+        Booking.BookingState.CANCELLED_BY_DRIVER,
+        Booking.BookingState.CANCELLED_BY_CUSTOMER,
+    },
+    Booking.BookingState.DRIVER_ARRIVED: {
+        Booking.BookingState.PICKUP_OTP_PENDING,
+        Booking.BookingState.CANCELLED_BY_CUSTOMER,
+        Booking.BookingState.CANCELLED_BY_DRIVER,
+    },
     Booking.BookingState.PICKUP_OTP_PENDING: {Booking.BookingState.TRIP_STARTED},
     Booking.BookingState.TRIP_STARTED: {Booking.BookingState.IN_TRANSIT},
     Booking.BookingState.IN_TRANSIT: {Booking.BookingState.NEARING_DROP},
@@ -68,6 +84,13 @@ def _accept_ride_while_searching(
         raise ValueError("Driver profile required to accept offers.")
     with transaction.atomic():
         locked = Booking.objects.select_for_update().get(id=booking.id)
+        if locked.state == Booking.BookingState.DRIVER_ACCEPTED and locked.driver_id == profile.id:
+            # Idempotent retry: this driver already accepted the offer
+            latest_seq = (
+                TripEvent.objects.filter(booking=locked).order_by("-sequence").values_list("sequence", flat=True).first()
+                or 1
+            )
+            return TransitionResult(str(locked.id), locked.state, latest_seq)
         if locked.state != Booking.BookingState.SEARCHING_DRIVER:
             raise ValueError("Booking is not accepting offers.")
         if locked.driver_id:
@@ -200,6 +223,15 @@ def transition_booking_state(
 ) -> TransitionResult:
     payload = payload or {}
     from_state = booking.state
+
+    # Idempotent retry: target state is already current state
+    if from_state == to_state:
+        current_seq = (
+            TripEvent.objects.filter(booking=booking).order_by("-sequence").values_list("sequence", flat=True).first()
+            or 0
+        )
+        return TransitionResult(str(booking.id), booking.state, current_seq)
+
     if from_state == Booking.BookingState.SEARCHING_DRIVER and to_state == Booking.BookingState.DRIVER_ACCEPTED and actor:
         from apps.drivers.models import DriverProfile
 

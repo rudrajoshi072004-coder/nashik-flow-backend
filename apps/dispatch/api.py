@@ -14,6 +14,42 @@ from .tasks import dispatch_booking
 class DispatchViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsAdminRole]
 
+    def get_permissions(self):
+        if self.action in {"decline_offer"}:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsAdminRole()]
+
+    @action(detail=False, methods=["post"], url_path="decline-offer")
+    def decline_offer(self, request):
+        from apps.drivers.models import DriverProfile
+        from .services import handle_driver_declined_offer
+
+        profile = getattr(request.user, "driver_profile", None) or DriverProfile.objects.filter(
+            user=request.user, is_deleted=False
+        ).first()
+        if not profile:
+            return success_response(
+                {"detail": "Driver profile required."},
+                message="Unauthorized",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        booking_id = request.data.get("booking_id")
+        if not booking_id:
+            return success_response(
+                {"detail": "booking_id is required."},
+                message="Bad Request",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        booking = Booking.objects.filter(id=booking_id).first()
+        if not booking:
+            return success_response(
+                {"detail": "Booking not found"},
+                message="Not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        handle_driver_declined_offer(booking=booking, driver_profile=profile)
+        return success_response({"booking_id": str(booking.id), "declined": True}, message="Offer declined")
+
     @action(detail=False, methods=["post"], url_path="trigger")
     def trigger(self, request):
         serializer = DispatchTriggerSerializer(data=request.data)

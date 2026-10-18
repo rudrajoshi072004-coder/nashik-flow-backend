@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from apps.common.api.throttling import OTPRequestRateThrottle, OTPVerifyRateThrottle
 from apps.common.permissions.rbac import IsAdminRole
 
 from .firebase_auth import FirebaseAuthError, issue_tokens_for_firebase
@@ -40,6 +41,7 @@ def _coerce_otp_payload(data) -> dict:
 class OTPRequestView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [OTPRequestRateThrottle]
 
     def post(self, request):
         serializer = OTPRequestSerializer(data=_coerce_otp_payload(request.data))
@@ -62,6 +64,7 @@ class OTPRequestView(APIView):
 class OTPVerifyView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [OTPVerifyRateThrottle]
 
     def post(self, request):
         serializer = OTPVerifySerializer(data=_coerce_otp_payload(request.data))

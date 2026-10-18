@@ -344,6 +344,18 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PAGINATION_CLASS": "apps.common.api.pagination.FlexiblePageNumberPagination",
     "PAGE_SIZE": int(os.getenv("API_PAGE_SIZE", "20")),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "apps.common.api.throttling.GlobalAnonRateThrottle",
+        "apps.common.api.throttling.GlobalUserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": os.getenv("THROTTLE_ANON_RATE", "120/min"),
+        "user": os.getenv("THROTTLE_USER_RATE", "600/min"),
+        "otp_request": os.getenv("THROTTLE_OTP_REQUEST_RATE", "5/min"),
+        "otp_verify": os.getenv("THROTTLE_OTP_VERIFY_RATE", "10/min"),
+        "fare_estimate": os.getenv("THROTTLE_FARE_ESTIMATE_RATE", "40/min"),
+        "driver_location": os.getenv("THROTTLE_DRIVER_LOCATION_RATE", "60/min"),
+    },
 }
 
 SIMPLE_JWT = {

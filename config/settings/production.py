@@ -27,13 +27,20 @@ else:
     # Allow mobile/web clients until explicit origins are configured on Railway.
     CORS_ALLOW_ALL_ORIGINS = True
 
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/.*\.railway\.app$",
+    r"^https:\/\/.*\.up\.railway\.app$",
+]
+
 _csrf_trusted = [
     origin.strip()
     for origin in (os.getenv("CSRF_TRUSTED_ORIGINS") or "").split(",")
     if origin.strip()
 ]
-if _csrf_trusted:
-    CSRF_TRUSTED_ORIGINS = _csrf_trusted
+CSRF_TRUSTED_ORIGINS = list(_csrf_trusted)
+for default_trusted in ("https://*.railway.app", "https://*.up.railway.app"):
+    if default_trusted not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(default_trusted)
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = True

@@ -371,7 +371,17 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
 }
 
+from corsheaders.defaults import default_headers
+
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_HEADERS = (
+    *default_headers,
+    "x-request-id",
+    "x-idempotency-key",
+)
+CORS_EXPOSE_HEADERS = [
+    "x-request-id",
+]
 
 # When set (e.g. 123456), OTP login uses this fixed code and skips cache lookup on verify.
 # Needed on multi-worker Railway when Redis is unavailable — locmem cache is not shared.

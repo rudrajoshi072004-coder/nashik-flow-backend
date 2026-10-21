@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 OTP_TTL_SECONDS = 300
-ALLOWED_OTP_ROLES = {"customer", "driver"}
+ALLOWED_OTP_ROLES = {"customer", "driver", "fleet_owner"}
 
 
 def _otp_cache_key(phone: str) -> str:
@@ -65,6 +65,7 @@ def verify_otp_and_issue_tokens(phone: str, otp: str, role: str = "customer") ->
     existing, _canonical = find_user_by_phone(user_model, phone)
     if existing:
         user = existing
+        created = False
     else:
         user = user_model.objects.create(
             phone=phone,
@@ -73,18 +74,40 @@ def verify_otp_and_issue_tokens(phone: str, otp: str, role: str = "customer") ->
             is_phone_verified=True,
             city="Nashik",
         )
+        created = True
 
-    user.is_phone_verified = True
-    update_fields = ["is_phone_verified"]
-    if hasattr(user, "updated_at"):
-        update_fields.append("updated_at")
-    if role_value == user_model.Role.DRIVER:
-        user.role = user_model.Role.DRIVER
-        update_fields.append("role")
-    user.save(update_fields=update_fields)
+    if role_value == user_model.Role.FLEET_OWNER:
+        blocked = {
+            user_model.Role.CUSTOMER,
+            user_model.Role.DRIVER,
+            user_model.Role.FLEET_DRIVER,
+            user_model.Role.CITY_MANAGER,
+            user_model.Role.SUPPORT_AGENT,
+            user_model.Role.FINANCE_ADMIN,
+            user_model.Role.SUPER_ADMIN,
+        }
+        if not created and user.role in blocked:
+            raise ValueError("This number is already used on another Carryoo app. Use a different owner phone number.")
+        user.role = user_model.Role.FLEET_OWNER
+        user.is_phone_verified = True
+        update_fields = ["role", "is_phone_verified"]
+        if hasattr(user, "updated_at"):
+            update_fields.append("updated_at")
+        user.save(update_fields=update_fields)
+        from apps.fleet.services import ensure_owner_profile
 
-    if role_value == user_model.Role.DRIVER:
-        _ensure_driver_profile(user)
+        ensure_owner_profile(user)
+    else:
+        user.is_phone_verified = True
+        update_fields = ["is_phone_verified"]
+        if hasattr(user, "updated_at"):
+            update_fields.append("updated_at")
+        if role_value == user_model.Role.DRIVER:
+            user.role = user_model.Role.DRIVER
+            update_fields.append("role")
+        user.save(update_fields=update_fields)
+        if role_value == user_model.Role.DRIVER:
+            _ensure_driver_profile(user)
 
     refresh = RefreshToken.for_user(user)
     return {

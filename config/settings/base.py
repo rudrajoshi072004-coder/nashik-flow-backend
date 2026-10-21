@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.profiles",
     "apps.customers",
     "apps.drivers",
+    "apps.fleet",
     "apps.driver_documents",
     "apps.vehicles",
     "apps.vehicle_categories",

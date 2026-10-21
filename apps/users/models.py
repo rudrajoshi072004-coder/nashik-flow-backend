@@ -10,6 +10,7 @@ class User(TimeStampedUUIDModel, SoftDeleteModel, AbstractUser):
         GUEST = "guest", "Guest"
         CUSTOMER = "customer", "Customer"
         DRIVER = "driver", "Driver"
+        FLEET_OWNER = "fleet_owner", "Fleet Owner"
         FLEET_DRIVER = "fleet_driver", "Fleet Driver"
         CITY_MANAGER = "city_manager", "City Manager"
         SUPPORT_AGENT = "support_agent", "Support Agent"

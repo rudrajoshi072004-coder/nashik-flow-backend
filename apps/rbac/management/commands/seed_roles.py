@@ -10,6 +10,7 @@ class Command(BaseCommand):
             ("guest", "Guest"),
             ("customer", "Customer"),
             ("driver", "Driver"),
+            ("fleet_owner", "Fleet Owner"),
             ("fleet_driver", "Fleet Driver"),
             ("city_manager", "City Manager"),
             ("support_agent", "Support Agent"),

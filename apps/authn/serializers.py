@@ -16,7 +16,7 @@ class OTPRequestSerializer(serializers.Serializer):
 class OTPVerifySerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
     otp = serializers.CharField(max_length=6, min_length=6)
-    role = serializers.ChoiceField(choices=["customer", "driver"], required=False, default="customer")
+    role = serializers.ChoiceField(choices=["customer", "driver", "fleet_owner"], required=False, default="customer")
 
     def validate_phone(self, value: str) -> str:
         value = normalize_phone_e164(value)
@@ -28,7 +28,7 @@ class OTPVerifySerializer(serializers.Serializer):
 class PasswordLoginSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=20)
     password = serializers.CharField(write_only=True, trim_whitespace=False)
-    role = serializers.ChoiceField(choices=["customer", "driver"], required=False)
+    role = serializers.ChoiceField(choices=["customer", "driver", "fleet_owner"], required=False)
 
     def validate_phone(self, value: str) -> str:
         value = normalize_phone_e164(value)

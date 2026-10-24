@@ -13,3 +13,10 @@ db.sqlite3
 *.xlsx
 *.xls
 Work Log*.xlsx
+
+# AI Skills & Scratch Checkouts
+*ponytail*
+scratch_ponytail/
+.agents/
+skills/
+

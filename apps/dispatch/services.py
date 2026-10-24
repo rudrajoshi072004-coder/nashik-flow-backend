@@ -89,9 +89,9 @@ def _broadcast_driver_provisional_assign(*, booking: Booking, driver_profile, di
 
     driver_id = str(driver_profile.id)
     booking_id = str(booking.id)
+    send_fcm_offer_immediate(booking_id, driver_profile, assignment_payload)
     if try_assign_driver(booking_id, driver_id):
         register_offer_pending(booking_id, driver_id)
-        send_fcm_offer_immediate(booking_id, driver_profile, assignment_payload)
         schedule_fcm_fallback(booking_id, driver_id, assignment_payload)
 
 

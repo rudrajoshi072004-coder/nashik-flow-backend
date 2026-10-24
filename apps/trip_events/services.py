@@ -30,13 +30,24 @@ def record_trip_event(
     )
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def broadcast_event(group: str, event_name: str, payload: dict):
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        group,
-        {
-            "type": "realtime.event",
-            "event_name": event_name,
-            "payload": payload,
-        },
-    )
+    if channel_layer is None:
+        return
+    try:
+        async_to_sync(channel_layer.group_send)(
+            group,
+            {
+                "type": "realtime.event",
+                "event_name": event_name,
+                "payload": payload,
+            },
+        )
+    except Exception:
+        logger.warning("broadcast_event failed for group %s event %s", group, event_name, exc_info=True)
+

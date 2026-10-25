@@ -65,6 +65,12 @@ class VehicleCategory(TimeStampedUUIDModel, SoftDeleteModel):
         default=0,
         help_text="Distance in km after which a trip is considered outstation for this vehicle. If 0, uses service zone radius.",
     )
+    commission_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=15.00,
+        help_text="Platform commission percentage for this vehicle category (0-100%).",
+    )
     helper_supported = models.BooleanField(default=False)
     intra_city_available = models.BooleanField(default=True)
     active = models.BooleanField(default=True)

@@ -18,8 +18,9 @@ from apps.payments.api import (
     RazorpayOrdersView,
     RazorpayWebhookView,
 )
+from apps.incentives.api import DriverOfferViewSet
 from apps.payouts.api import PayoutViewSet
-from apps.pricing.api import PricingRuleViewSet
+from apps.pricing.api import PricingRuleViewSet, RouteTollViewSet
 from apps.service_zones.api import ServiceZoneViewSet
 from apps.support.api import SupportTicketViewSet
 from apps.ride_socket_demo.views import DriversListView
@@ -39,7 +40,9 @@ router.register(r"vehicle-categories", VehicleCategoryViewSet, basename="vehicle
 router.register(r"service-zones", ServiceZoneViewSet, basename="service-zones")
 router.register(r"bookings", BookingViewSet, basename="bookings")
 router.register(r"pricing-rules", PricingRuleViewSet, basename="pricing-rules")
+router.register(r"route-tolls", RouteTollViewSet, basename="route-tolls")
 router.register(r"fare-rules", FareRuleViewSet, basename="fare-rules")
+
 router.register(r"dispatch", DispatchViewSet, basename="dispatch")
 router.register(r"tracking/driver-locations", DriverLiveLocationViewSet, basename="driver-locations")
 router.register(r"wallets", WalletViewSet, basename="wallets")
@@ -47,6 +50,7 @@ router.register(r"wallet-transactions", WalletTransactionViewSet, basename="wall
 router.register(r"payouts", PayoutViewSet, basename="payouts")
 router.register(r"payments", PaymentViewSet, basename="payments")
 router.register(r"support-tickets", SupportTicketViewSet, basename="support-tickets")
+router.register(r"driver-offers", DriverOfferViewSet, basename="driver-offers")
 router.register(r"admin/ops", AdminOpsViewSet, basename="admin-ops")
 router.register(r"admin/audit-logs", AdminAuditLogViewSet, basename="admin-audit-logs")
 

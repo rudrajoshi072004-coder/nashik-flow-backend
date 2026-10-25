@@ -195,15 +195,31 @@ def compute_fare_quote(
     )
 
     slab_rule = None
+    toll_charges = Decimal("0.00")
+    toll_source = "none"
+
     if trip_type == Booking.TripType.OUTSTATION:
         rates = resolve_outstation_rates_for_category(category)
         if rates is None:
             slab_rule = resolve_outstation_slab(category, city_norm, distance_km)
             rates = _slab_to_rates(slab_rule)
+
+        from apps.pricing.toll_service import get_or_fetch_route_toll
+        toll_info = get_or_fetch_route_toll(
+            pickup_lat=pickup_lat,
+            pickup_lng=pickup_lng,
+            drop_lat=drop_lat,
+            drop_lng=drop_lng,
+            category=category,
+        )
+        toll_charges = Decimal(str(toll_info.get("toll_amount") or "0.00"))
+        toll_source = str(toll_info.get("source") or "none")
     else:
         rates = resolve_rates_for_category(category, city=city_norm, trip_type=Booking.TripType.WITHIN_CITY)
 
-    estimated_fare = calculate_estimated_fare(rates, distance_km, requires_helper=requires_helper)
+    base_estimated_fare = calculate_estimated_fare(rates, distance_km, requires_helper=requires_helper)
+    estimated_fare = (base_estimated_fare + toll_charges).quantize(Decimal("0.01"))
+
     breakdown = fare_breakdown_payload(
         rates,
         distance_km,
@@ -213,6 +229,9 @@ def compute_fare_quote(
     breakdown["trip_type"] = trip_type
     breakdown["resolved_trip_type"] = resolved_trip_type
     breakdown["distance_source"] = distance_source
+    breakdown["toll_charges"] = str(toll_charges)
+    breakdown["toll_source"] = toll_source
+    breakdown["fare_without_toll"] = str(base_estimated_fare)
     if needs_trip_classification:
         breakdown["service_radius_km"] = str(service_radius)
     if trip_type == Booking.TripType.OUTSTATION:
@@ -225,6 +244,7 @@ def compute_fare_quote(
             )
     else:
         breakdown["pricing_mode"] = "within_city"
+
 
     return FareQuote(
         distance_km=distance_km,

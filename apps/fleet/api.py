@@ -17,18 +17,29 @@ from apps.common.api.responses import success_response
 from apps.common.api.throttling import FleetAddDriverRateThrottle, FleetOpsRateThrottle
 from apps.common.permissions.rbac import HasRole
 
-from .models import FleetDriverMembership
-from .serializers import AddFleetDriverSerializer, FleetOwnerProfileSerializer, UpdateMembershipSerializer
+from .models import FleetDriverMembership, FleetOwnerDocument, FleetOwnerProfile
+from .serializers import (
+    AddFleetDriverSerializer,
+    FleetAnalyticsFilterSerializer,
+    FleetDocumentUploadSerializer,
+    FleetOwnerDocumentSerializer,
+    FleetOwnerProfileSerializer,
+    OwnerKycSubmitSerializer,
+    UpdateMembershipSerializer,
+)
 from .services import (
     add_driver_to_fleet,
     ensure_owner_profile,
     fleet_alerts,
+    fleet_analytics,
     fleet_dashboard,
     fleet_earnings,
     fleet_trips,
     owner_active_memberships,
     serialize_membership,
     serialize_memberships_batch,
+    submit_owner_kyc,
+    upload_fleet_document,
 )
 
 
@@ -254,3 +265,81 @@ class OwnerEarningsView(APIView):
     def get(self, request):
         profile = ensure_owner_profile(request.user)
         return success_response(fleet_earnings(profile))
+
+
+class OwnerDocumentsView(APIView):
+    permission_classes = [IsAuthenticated, IsFleetOwnerRole]
+    throttle_classes = [FleetOpsRateThrottle]
+
+    def get(self, request):
+        profile = ensure_owner_profile(request.user)
+        docs = FleetOwnerDocument.objects.filter(owner=profile, is_deleted=False).order_by("created_at")
+        return success_response({
+            "kyc_status": profile.kyc_status,
+            "kyc_submitted_at": profile.kyc_submitted_at,
+            "kyc_verified_at": profile.kyc_verified_at,
+            "kyc_rejection_reason": profile.kyc_rejection_reason,
+            "documents": FleetOwnerDocumentSerializer(docs, many=True).data,
+        })
+
+    def post(self, request):
+        """Submit owner business details and document links for KYC review."""
+        profile = ensure_owner_profile(request.user)
+        serializer = OwnerKycSubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        updated_profile = submit_owner_kyc(profile, serializer.validated_data)
+        return success_response(
+            FleetOwnerProfileSerializer(updated_profile).data,
+            message="KYC application submitted for review.",
+            status_code=status.HTTP_200_OK,
+        )
+
+
+class FleetDocumentUploadView(APIView):
+    permission_classes = [IsAuthenticated, IsFleetOwnerRole]
+    throttle_classes = [FleetOpsRateThrottle]
+
+    def post(self, request):
+        """Upload a file or document URL for fleet owner KYC or a fleet driver's vehicle."""
+        profile = ensure_owner_profile(request.user)
+        serializer = FleetDocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        file_obj = request.FILES.get("file") or data.get("file")
+        try:
+            result = upload_fleet_document(
+                owner=profile,
+                document_type=data["document_type"],
+                file_obj=file_obj,
+                file_url=data.get("file_url", ""),
+                document_number=data.get("document_number", ""),
+                target=data.get("target", "owner"),
+                driver_id=data.get("driver_id"),
+            )
+            return success_response(result, message="Document uploaded successfully", status_code=status.HTTP_201_CREATED)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class OwnerAnalyticsView(APIView):
+    permission_classes = [IsAuthenticated, IsFleetOwnerRole]
+    throttle_classes = [FleetOpsRateThrottle]
+
+    def get(self, request):
+        """Real-time filtered fleet KPIs and driver leaderboard for owner app."""
+        profile = ensure_owner_profile(request.user)
+        filter_serializer = FleetAnalyticsFilterSerializer(data=request.query_params)
+        filter_serializer.is_valid(raise_exception=True)
+        data = filter_serializer.validated_data
+
+        analytics_data = fleet_analytics(
+            profile,
+            period=data.get("period", "today"),
+            category=data.get("category", "all"),
+            driver_id=data.get("driver_id"),
+            start_date=data.get("start_date"),
+            end_date=data.get("end_date"),
+        )
+        return success_response(analytics_data)

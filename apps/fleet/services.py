@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from datetime import timedelta
 from decimal import Decimal
 
@@ -10,11 +12,15 @@ from django.utils import timezone
 
 from apps.authn.phone_utils import find_user_by_phone
 from apps.bookings.models import Booking
+from apps.common.r2 import get_public_url, is_r2_configured, upload_bytes_to_r2
+from apps.driver_documents.models import DriverDocument
 from apps.drivers.models import DriverProfile
 from apps.tracking.models import DriverLiveLocation
 from apps.users.models import User
 
-from .models import FleetDriverMembership, FleetOwnerProfile
+from .models import FleetDriverMembership, FleetOwnerDocument, FleetOwnerProfile
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_TRIP_STATES = {
     Booking.BookingState.DRIVER_ACCEPTED,
@@ -70,9 +76,11 @@ def add_driver_to_fleet(
     owner: FleetOwnerProfile,
     phone: str,
     driver_name: str = "",
+    password: str = "",
     vehicle_number: str = "",
     vehicle_type: str = "",
     notes: str = "",
+    documents: dict | None = None,
 ) -> FleetDriverMembership:
     existing_user, canonical = find_user_by_phone(User, phone)
     created_user = False
@@ -91,9 +99,18 @@ def add_driver_to_fleet(
     elif existing_user.role in {User.Role.CUSTOMER} and not DriverProfile.objects.filter(user=existing_user).exists():
         raise ValueError("This number is registered as a customer. Ask the driver to use their driver app number.")
 
+    user_dirty = []
     if existing_user.role not in {User.Role.DRIVER, User.Role.FLEET_DRIVER}:
         existing_user.role = User.Role.FLEET_DRIVER
-        existing_user.save(update_fields=["role", "updated_at"])
+        user_dirty.append("role")
+
+    if password:
+        existing_user.set_password(password)
+        existing_user.is_phone_verified = True
+        user_dirty.extend(["password", "is_phone_verified"])
+
+    if user_dirty:
+        existing_user.save(update_fields=list(set(user_dirty + ["updated_at"])))
 
     driver, _ = DriverProfile.objects.get_or_create(user=existing_user)
     dirty = []
@@ -108,6 +125,36 @@ def add_driver_to_fleet(
         dirty.append("vehicle_type")
     if dirty:
         driver.save(update_fields=dirty + ["updated_at"])
+
+    # If owner provided supporting docs for the driver or vehicle, attach them
+    if documents and isinstance(documents, dict):
+        doc_type_mapping = {
+            "license": DriverDocument.DocumentType.LICENSE,
+            "license_front": DriverDocument.DocumentType.LICENSE_FRONT,
+            "license_back": DriverDocument.DocumentType.LICENSE_BACK,
+            "rc": DriverDocument.DocumentType.RC,
+            "insurance": DriverDocument.DocumentType.INSURANCE,
+            "pan": DriverDocument.DocumentType.PAN,
+            "pan_front": DriverDocument.DocumentType.PAN_FRONT,
+            "pan_back": DriverDocument.DocumentType.PAN_BACK,
+            "aadhaar": DriverDocument.DocumentType.AADHAAR,
+            "aadhaar_front": DriverDocument.DocumentType.AADHAAR_FRONT,
+            "aadhaar_back": DriverDocument.DocumentType.AADHAAR_BACK,
+        }
+        for doc_key, doc_val in documents.items():
+            if not doc_val:
+                continue
+            mapped_type = doc_type_mapping.get(str(doc_key).lower())
+            if mapped_type:
+                DriverDocument.objects.update_or_create(
+                    driver=driver,
+                    document_type=mapped_type,
+                    defaults={
+                        "file_key": str(doc_val),
+                        "status": DriverDocument.Status.PENDING,
+                        "is_deleted": False,
+                    },
+                )
 
     # Edge Case: Check if driver is already an active member of another fleet
     other_active = (
@@ -529,4 +576,432 @@ def fleet_earnings(owner: FleetOwnerProfile) -> dict:
         "month": dash["month"],
         "lifetime": dash["lifetime"],
         "by_driver": by_driver,
+    }
+
+
+def upsert_owner_document(
+    owner: FleetOwnerProfile,
+    document_type: str,
+    file_key: str = "",
+    file_url: str = "",
+    image_bytes: bytes | None = None,
+    content_type: str = "image/jpeg",
+    document_number: str = "",
+) -> FleetOwnerDocument:
+    doc, _ = FleetOwnerDocument.objects.update_or_create(
+        owner=owner,
+        document_type=document_type,
+        defaults={
+            "file_key": file_key,
+            "file_url": file_url,
+            "image": image_bytes,
+            "content_type": content_type or "image/jpeg",
+            "document_number": (document_number or "")[:64],
+            "status": FleetOwnerDocument.Status.PENDING,
+            "is_deleted": False,
+        },
+    )
+    return doc
+
+
+def upload_fleet_document(
+    *,
+    owner: FleetOwnerProfile,
+    document_type: str,
+    file_obj=None,
+    file_url: str = "",
+    document_number: str = "",
+    target: str = "owner",
+    driver_id: str | None = None,
+) -> dict:
+    file_key = ""
+    public_url = file_url
+    image_bytes = None
+    content_type = "image/jpeg"
+
+    if file_obj:
+        content_type = getattr(file_obj, "content_type", "image/jpeg") or "image/jpeg"
+        file_bytes = file_obj.read()
+        ts = int(time.time())
+        ext = "jpg"
+        if "png" in content_type:
+            ext = "png"
+        elif "pdf" in content_type:
+            ext = "pdf"
+        file_key = f"fleet/{owner.id}/{target}/{document_type}_{ts}.{ext}"
+
+        if is_r2_configured():
+            try:
+                upload_bytes_to_r2(file_key, file_bytes, content_type)
+                public_url = get_public_url(file_key)
+            except Exception as exc:
+                logger.warning("R2 upload failed, saving fallback image in DB: %s", exc)
+                image_bytes = file_bytes
+        else:
+            image_bytes = file_bytes
+
+    if target == "owner":
+        doc = upsert_owner_document(
+            owner=owner,
+            document_type=document_type,
+            file_key=file_key,
+            file_url=public_url,
+            image_bytes=image_bytes,
+            content_type=content_type,
+            document_number=document_number,
+        )
+        return {
+            "target": "owner",
+            "id": str(doc.id),
+            "document_type": doc.document_type,
+            "status": doc.status,
+            "file_key": doc.file_key,
+            "file_url": doc.file_url,
+            "document_number": doc.document_number,
+        }
+    elif target == "driver":
+        if not driver_id:
+            raise ValueError("driver_id is required when target is driver")
+        membership = (
+            FleetDriverMembership.objects.filter(owner=owner, driver_id=driver_id, is_deleted=False)
+            .select_related("driver")
+            .first()
+        )
+        if not membership:
+            raise ValueError("Driver does not belong to your fleet")
+
+        doc_type_mapping = {
+            "license": DriverDocument.DocumentType.LICENSE,
+            "license_front": DriverDocument.DocumentType.LICENSE_FRONT,
+            "license_back": DriverDocument.DocumentType.LICENSE_BACK,
+            "rc": DriverDocument.DocumentType.RC,
+            "insurance": DriverDocument.DocumentType.INSURANCE,
+            "pan": DriverDocument.DocumentType.PAN,
+            "pan_front": DriverDocument.DocumentType.PAN_FRONT,
+            "pan_back": DriverDocument.DocumentType.PAN_BACK,
+            "aadhaar": DriverDocument.DocumentType.AADHAAR,
+            "aadhaar_front": DriverDocument.DocumentType.AADHAAR_FRONT,
+            "aadhaar_back": DriverDocument.DocumentType.AADHAAR_BACK,
+            "owner_selfie": DriverDocument.DocumentType.OWNER_SELFIE,
+        }
+        mapped_type = doc_type_mapping.get(document_type.lower(), DriverDocument.DocumentType.LICENSE_FRONT)
+        driver_doc, _ = DriverDocument.objects.update_or_create(
+            driver=membership.driver,
+            document_type=mapped_type,
+            defaults={
+                "file_key": file_key or public_url,
+                "image": image_bytes,
+                "content_type": content_type,
+                "document_number": (document_number or "")[:64],
+                "status": DriverDocument.Status.PENDING,
+                "is_deleted": False,
+            },
+        )
+        return {
+            "target": "driver",
+            "id": str(driver_doc.id),
+            "driver_id": str(membership.driver.id),
+            "document_type": driver_doc.document_type,
+            "status": driver_doc.status,
+            "file_key": driver_doc.file_key,
+            "document_number": driver_doc.document_number,
+        }
+    else:
+        raise ValueError("Invalid target")
+
+
+@transaction.atomic
+def submit_owner_kyc(owner: FleetOwnerProfile, data: dict) -> FleetOwnerProfile:
+    for field in (
+        "business_name",
+        "owner_full_name",
+        "city",
+        "address",
+        "gstin",
+        "pan",
+        "vehicle_count",
+        "bank_account_name",
+        "bank_account_number",
+        "bank_ifsc",
+        "upi_id",
+    ):
+        if field in data and data[field] is not None:
+            setattr(owner, field, data[field])
+
+    docs = data.get("documents")
+    if docs and isinstance(docs, dict):
+        for doc_type, val in docs.items():
+            if val and isinstance(val, str):
+                upsert_owner_document(
+                    owner,
+                    document_type=doc_type,
+                    file_key=val,
+                    file_url=val if val.startswith("http") else "",
+                )
+
+    owner.kyc_status = FleetOwnerProfile.KYCStatus.UNDER_REVIEW
+    owner.kyc_submitted_at = timezone.now()
+    owner.save()
+    return owner
+
+
+def fleet_analytics(
+    owner: FleetOwnerProfile,
+    *,
+    period: str = "today",
+    category: str = "all",
+    driver_id: str | None = None,
+    start_date=None,
+    end_date=None,
+) -> dict:
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    memberships_qs = owner_active_memberships(owner)
+    all_memberships = list(memberships_qs)
+
+    filtered_memberships = all_memberships
+    if category and category.lower() != "all":
+        cat_lower = category.lower().replace("-", "").replace(" ", "").replace("_", "")
+        filtered_memberships = [
+            m
+            for m in filtered_memberships
+            if cat_lower in (m.vehicle_type or "").lower().replace("-", "").replace(" ", "").replace("_", "")
+        ]
+    if driver_id:
+        filtered_memberships = [
+            m for m in filtered_memberships if str(m.driver_id) == str(driver_id) or str(m.id) == str(driver_id)
+        ]
+
+    filtered_driver_ids = [m.driver_id for m in filtered_memberships]
+
+    # Calculate date horizons
+    if period == "yesterday":
+        curr_start = today_start - timedelta(days=1)
+        curr_end = today_start
+        prev_start = today_start - timedelta(days=2)
+        prev_end = today_start - timedelta(days=1)
+        display_label = curr_start.strftime("%a, %d %b %Y")
+    elif period == "week":
+        curr_start = today_start - timedelta(days=today_start.weekday())
+        curr_end = now
+        delta = curr_end - curr_start
+        prev_end = curr_start
+        prev_start = prev_end - delta
+        display_label = f"Week of {curr_start.strftime('%d %b')}"
+    elif period == "month":
+        curr_start = today_start.replace(day=1)
+        curr_end = now
+        prev_end = curr_start
+        prev_start = (curr_start - timedelta(days=1)).replace(day=1)
+        display_label = curr_start.strftime("%B %Y")
+    elif period == "custom" and start_date and end_date:
+        from datetime import datetime, time as dtime
+
+        curr_start = timezone.make_aware(datetime.combine(start_date, dtime.min))
+        curr_end = timezone.make_aware(datetime.combine(end_date, dtime.max))
+        delta = curr_end - curr_start
+        prev_end = curr_start
+        prev_start = prev_end - delta
+        display_label = f"{start_date.strftime('%d %b')} - {end_date.strftime('%d %b')}"
+    else:  # today
+        curr_start = today_start
+        curr_end = now
+        prev_start = today_start - timedelta(days=1)
+        prev_end = now - timedelta(days=1)
+        display_label = now.strftime("%a, %d %b %Y")
+
+    # Available categories breakdown
+    cat_counts: dict[str, int] = {}
+    for m in all_memberships:
+        vtype = m.vehicle_type or "3W"
+        cat_counts[vtype] = cat_counts.get(vtype, 0) + 1
+
+    available_categories = [
+        {"slug": "all", "name": f"All Vehicles ({len(all_memberships)})", "count": len(all_memberships)}
+    ]
+    for vtype, count in cat_counts.items():
+        available_categories.append({"slug": vtype.lower(), "name": f"{vtype} ({count})", "count": count})
+
+    # Empty fleet guard
+    if not filtered_driver_ids:
+        return {
+            "fleet_id": f"#MH-NSK-{str(owner.id)[:4].upper()}",
+            "business_name": owner.business_name or "Transport Fleet",
+            "period": period,
+            "period_label": display_label,
+            "sync_timestamp": now.isoformat(),
+            "kpis": {
+                "gross_bookings": "0.00",
+                "net_revenue": "0.00",
+                "platform_commission": "0.00",
+                "completed_trips": 0,
+                "active_trips": 0,
+                "cancelled_trips": 0,
+                "fleet_utilization_percent": 0.0,
+                "active_vehicles": 0,
+                "total_vehicles": len(all_memberships),
+                "growth_vs_previous_percent": 0.0,
+            },
+            "driver_status_matrix": {
+                "active": 0,
+                "on_trip": 0,
+                "idle": 0,
+                "offline": 0,
+                "total_registered": len(all_memberships),
+            },
+            "driver_leaderboard": [],
+            "available_categories": available_categories,
+        }
+
+    # High-performance batch aggregates
+    completed_qs = Booking.objects.filter(
+        is_deleted=False,
+        driver_id__in=filtered_driver_ids,
+        state=Booking.BookingState.COMPLETED,
+        updated_at__gte=curr_start,
+        updated_at__lte=curr_end,
+    )
+    prev_completed_qs = Booking.objects.filter(
+        is_deleted=False,
+        driver_id__in=filtered_driver_ids,
+        state=Booking.BookingState.COMPLETED,
+        updated_at__gte=prev_start,
+        updated_at__lte=prev_end,
+    )
+    cancelled_count = Booking.objects.filter(
+        is_deleted=False,
+        driver_id__in=filtered_driver_ids,
+        state=Booking.BookingState.CANCELLED,
+        updated_at__gte=curr_start,
+        updated_at__lte=curr_end,
+    ).count()
+
+    active_trips_qs = Booking.objects.filter(
+        is_deleted=False,
+        driver_id__in=filtered_driver_ids,
+        state__in=ACTIVE_TRIP_STATES,
+    )
+    active_trips_count = active_trips_qs.count()
+    active_trip_driver_ids = set(active_trips_qs.values_list("driver_id", flat=True))
+
+    curr_agg = completed_qs.aggregate(
+        gross=Sum("final_fare"),
+        trips=Count("id"),
+    )
+    prev_agg = prev_completed_qs.aggregate(
+        gross=Sum("final_fare"),
+    )
+
+    gross_dec = Decimal(curr_agg["gross"] or 0)
+    prev_gross_dec = Decimal(prev_agg["gross"] or 0)
+    completed_trips = curr_agg["trips"] or 0
+
+    commission_dec = (gross_dec * Decimal("0.15")).quantize(Decimal("0.01"))
+    net_dec = (gross_dec - commission_dec).quantize(Decimal("0.01"))
+
+    if prev_gross_dec > 0:
+        growth_pct = float(round(((gross_dec - prev_gross_dec) / prev_gross_dec) * 100, 1))
+    elif gross_dec > 0:
+        growth_pct = 100.0
+    else:
+        growth_pct = 0.0
+
+    drivers_list = DriverProfile.objects.filter(id__in=filtered_driver_ids)
+    online_driver_ids = set(drivers_list.filter(is_online=True).values_list("id", flat=True))
+
+    on_trip_count = len(active_trip_driver_ids)
+    online_count = len(online_driver_ids)
+    idle_count = max(0, online_count - on_trip_count)
+    offline_count = max(0, len(filtered_driver_ids) - online_count)
+    active_vehicles_count = len(online_driver_ids.union(active_trip_driver_ids))
+    utilization_pct = (
+        round((active_vehicles_count / len(filtered_driver_ids)) * 100, 1) if filtered_driver_ids else 0.0
+    )
+
+    driver_trip_stats = {
+        row["driver_id"]: row
+        for row in completed_qs.values("driver_id").annotate(
+            total=Sum("final_fare"),
+            trips=Count("id"),
+        )
+    }
+
+    driver_map = {d.id: d for d in drivers_list}
+    leaderboard = []
+    for m in filtered_memberships:
+        d = driver_map.get(m.driver_id)
+        if not d:
+            continue
+        stat = driver_trip_stats.get(m.driver_id, {})
+        d_gross = Decimal(stat.get("total") or 0)
+        d_net = (d_gross * Decimal("0.85")).quantize(Decimal("0.01"))
+        d_trips = stat.get("trips") or 0
+
+        if m.status == FleetDriverMembership.Status.SUSPENDED:
+            live_status = "suspended"
+            status_label = "Suspended"
+        elif m.driver_id in active_trip_driver_ids:
+            live_status = "on_trip"
+            status_label = "On Trip"
+        elif d.is_online:
+            live_status = "idle"
+            status_label = "Available"
+        else:
+            live_status = "offline"
+            status_label = "Offline"
+
+        name = (
+            m.driver_display_name
+            or (d.public_display_name() if hasattr(d, "public_display_name") else "")
+            or getattr(d, "driver_name", "")
+            or d.user.first_name
+            or "Driver"
+        )
+        leaderboard.append(
+            {
+                "membership_id": str(m.id),
+                "driver_id": str(m.driver_id),
+                "name": name,
+                "vehicle_number": m.vehicle_number or getattr(d, "vehicle_number", ""),
+                "vehicle_type": m.vehicle_type or getattr(d, "vehicle_type", "3W"),
+                "trips": d_trips,
+                "earnings": _money(d_net),
+                "rating": str(d.rating_avg),
+                "status": live_status,
+                "status_label": status_label,
+            }
+        )
+
+    leaderboard.sort(key=lambda x: (Decimal(x["earnings"]), x["trips"]), reverse=True)
+    for idx, item in enumerate(leaderboard, start=1):
+        item["rank"] = idx
+
+    return {
+        "fleet_id": f"#MH-NSK-{str(owner.id)[:4].upper()}",
+        "business_name": owner.business_name or "Transport Fleet",
+        "period": period,
+        "period_label": display_label,
+        "sync_timestamp": now.isoformat(),
+        "kpis": {
+            "gross_bookings": _money(gross_dec),
+            "net_revenue": _money(net_dec),
+            "platform_commission": _money(commission_dec),
+            "completed_trips": completed_trips,
+            "active_trips": active_trips_count,
+            "cancelled_trips": cancelled_count,
+            "fleet_utilization_percent": utilization_pct,
+            "active_vehicles": active_vehicles_count,
+            "total_vehicles": len(filtered_driver_ids),
+            "growth_vs_previous_percent": growth_pct,
+        },
+        "driver_status_matrix": {
+            "active": online_count,
+            "on_trip": on_trip_count,
+            "idle": idle_count,
+            "offline": offline_count,
+            "total_registered": len(filtered_driver_ids),
+        },
+        "driver_leaderboard": leaderboard,
+        "available_categories": available_categories,
     }

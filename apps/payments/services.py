@@ -23,7 +23,7 @@ def create_razorpay_order_service(
     receipt: str = "",
     notes: dict | None = None,
 ) -> dict:
-    key_id = getattr(settings, "RAZORPAY_KEY_ID", "").strip() or "rzp_test_T0nCChoFYiRI8f"
+    key_id = getattr(settings, "RAZORPAY_KEY_ID", "").strip()
     key_secret = getattr(settings, "RAZORPAY_KEY_SECRET", "").strip()
 
     if key_id and key_secret:
@@ -64,7 +64,7 @@ def create_razorpay_order_service(
 
 
 def generate_trip_payment_qr_service(booking: Booking) -> dict:
-    key_id = getattr(settings, "RAZORPAY_KEY_ID", "").strip() or "rzp_test_T0nCChoFYiRI8f"
+    key_id = getattr(settings, "RAZORPAY_KEY_ID", "").strip()
     key_secret = getattr(settings, "RAZORPAY_KEY_SECRET", "").strip()
 
     fare = booking.final_fare if booking.final_fare > 0 else booking.estimated_fare

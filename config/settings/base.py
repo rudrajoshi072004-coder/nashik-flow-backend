@@ -494,13 +494,13 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_MAX_TASKS_PER_CHILD", 
 CELERY_WORKER_MAX_MEMORY_PER_CHILD = int(os.getenv("CELERY_MAX_MEMORY_PER_CHILD", "200000"))
 
 # Razorpay Configuration & Platform Commission
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_test_T0nCChoFYiRI8f").strip()
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "").strip()
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
 PLATFORM_COMMISSION_PERCENT = float(os.getenv("PLATFORM_COMMISSION_PERCENT", "15.0"))
 
 # Google Maps Platform & Outstation Toll Estimation Configuration
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyA0vHTutdqin0GObdppFDAiMGpRj6CarvE").strip()
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
 ENABLE_TOLL_CALCULATION = os.getenv("ENABLE_TOLL_CALCULATION", "true").lower() in ("true", "1", "yes")
 TOLL_CACHE_TTL_DAYS = int(os.getenv("TOLL_CACHE_TTL_DAYS", "30"))
 

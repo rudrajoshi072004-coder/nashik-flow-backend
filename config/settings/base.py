@@ -356,6 +356,8 @@ REST_FRAMEWORK = {
         "otp_verify": os.getenv("THROTTLE_OTP_VERIFY_RATE", "10/min"),
         "fare_estimate": os.getenv("THROTTLE_FARE_ESTIMATE_RATE", "40/min"),
         "driver_location": os.getenv("THROTTLE_DRIVER_LOCATION_RATE", "60/min"),
+        "fleet_add_driver": os.getenv("THROTTLE_FLEET_ADD_DRIVER_RATE", "15/min"),
+        "fleet_ops": os.getenv("THROTTLE_FLEET_OPS_RATE", "120/min"),
     },
 }
 

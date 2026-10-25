@@ -122,9 +122,24 @@ def _not_on_active_trip() -> Q:
     return ~Q(driver_id__in=busy_progressed) & ~Q(driver_id__in=busy_accept_only)
 
 
+def _suspended_fleet_driver_ids() -> list:
+    try:
+        from apps.fleet.models import FleetDriverMembership
+
+        return list(
+            FleetDriverMembership.objects.filter(
+                is_deleted=False,
+                status=FleetDriverMembership.Status.SUSPENDED,
+            ).values_list("driver_id", flat=True)
+        )
+    except Exception:
+        return []
+
+
 def _base_live_qs(*, strict_kyc: bool = True) -> QuerySet[DriverLiveLocation]:
     kyc_filter = {"driver__kyc_status": DriverProfile.KYCStatus.APPROVED} if strict_kyc else {}
-    return (
+    suspended_ids = _suspended_fleet_driver_ids()
+    qs = (
         DriverLiveLocation.objects.select_related("driver", "driver__user")
         .filter(
             driver__is_online=True,
@@ -133,6 +148,9 @@ def _base_live_qs(*, strict_kyc: bool = True) -> QuerySet[DriverLiveLocation]:
         )
         .filter(_not_on_active_trip())
     )
+    if suspended_ids:
+        qs = qs.exclude(driver_id__in=suspended_ids)
+    return qs
 
 
 def _eligible_profiles_from_redis_ids(
@@ -150,6 +168,7 @@ def _eligible_profiles_from_redis_ids(
     q = (
         DriverProfile.objects.filter(id__in=ids, is_online=True, is_deleted=False)
         .exclude(id__in=_busy_driver_ids())
+        .exclude(id__in=_suspended_fleet_driver_ids())
     )
     if strict_kyc:
         q = q.filter(kyc_status=DriverProfile.KYCStatus.APPROVED)
@@ -287,6 +306,7 @@ def find_online_profiles_without_live_location(
         DriverProfile.objects.filter(is_online=True, is_deleted=False)
         .exclude(id__in=exclude_driver_ids)
         .exclude(id__in=_busy_driver_ids())
+        .exclude(id__in=_suspended_fleet_driver_ids())
         .exclude(id__in=located_ids)
     )
     if booking and getattr(booking, "trip_type", None) == Booking.TripType.OUTSTATION:

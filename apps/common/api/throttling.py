@@ -61,3 +61,29 @@ class DriverLocationRateThrottle(SimpleRateThrottle):
         if request.user and request.user.is_authenticated:
             return f"throttle:driver_loc:{request.user.id}"
         return f"throttle:driver_loc:{self.get_ident(request)}"
+
+
+class FleetAddDriverRateThrottle(SimpleRateThrottle):
+    """
+    Protects against automated bot loops spamming driver phone invites.
+    Limits fleet driver creation requests per authenticated owner.
+    """
+    scope = "fleet_add_driver"
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return f"throttle:fleet_add:{request.user.id}"
+        return f"throttle:fleet_add:{self.get_ident(request)}"
+
+
+class FleetOpsRateThrottle(SimpleRateThrottle):
+    """
+    Protects fleet owner query and telemetry polling endpoints against DDoS / runaway client loops.
+    """
+    scope = "fleet_ops"
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            return f"throttle:fleet_ops:{request.user.id}"
+        return f"throttle:fleet_ops:{self.get_ident(request)}"
+

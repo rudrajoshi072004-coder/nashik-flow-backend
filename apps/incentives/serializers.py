@@ -38,6 +38,7 @@ class DriverOfferUsageSerializer(serializers.ModelSerializer):
 
 
 class DriverOfferSerializer(serializers.ModelSerializer):
+    banner_url = serializers.CharField(required=False, allow_blank=True, default="")
     usages_count = serializers.SerializerMethodField()
     drivers_benefited_count = serializers.SerializerMethodField()
     total_commission_saved = serializers.SerializerMethodField()
@@ -74,9 +75,19 @@ class DriverOfferSerializer(serializers.ModelSerializer):
         if not title:
             raise serializers.ValidationError({"title": "Offer title is mandatory."})
 
+        request = self.context.get("request")
+        has_file = bool(
+            request
+            and getattr(request, "FILES", None)
+            and (request.FILES.get("file") or request.FILES.get("banner") or request.FILES.get("image"))
+        )
+
         banner_url = (attrs.get("banner_url") or (self.instance.banner_url if self.instance else "")).strip()
         if not banner_url:
-            raise serializers.ValidationError({"banner_url": "Banner image is mandatory."})
+            if has_file:
+                attrs["banner_url"] = "/api/v1/driver-offers/pending-banner/"
+            elif not self.instance:
+                raise serializers.ValidationError({"banner_url": "Banner image is mandatory. Please upload an image or provide a valid banner URL."})
 
         start_date = attrs.get("start_date") or (self.instance.start_date if self.instance else None)
         end_date = attrs.get("end_date") or (self.instance.end_date if self.instance else None)

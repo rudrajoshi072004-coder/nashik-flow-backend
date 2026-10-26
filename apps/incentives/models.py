@@ -44,6 +44,8 @@ class DriverOffer(TimeStampedUUIDModel, SoftDeleteModel):
     start_date = models.DateField(help_text="Start date of the offer period", db_index=True)
     end_date = models.DateField(help_text="End date of the offer period", db_index=True)
     banner_url = models.TextField(
+        blank=True,
+        default="",
         help_text="Mandatory image banner URL or Cloudflare R2 / media path",
     )
     banner_image = models.BinaryField(null=True, blank=True)

@@ -6,8 +6,9 @@ from decimal import Decimal
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseRedirect
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import serializers as drf_serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
@@ -26,12 +27,61 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def process_and_save_banner(offer: DriverOffer, upload) -> str:
+    content_type = getattr(upload, "content_type", "") or "image/jpeg"
+    content_type = content_type.split(";")[0].strip().lower()
+    if not content_type.startswith("image/"):
+        raise drf_serializers.ValidationError({"detail": "File must be an image (JPEG, PNG, WebP)."})
+
+    file_bytes = upload.read()
+    if len(file_bytes) > 8 * 1024 * 1024:
+        raise drf_serializers.ValidationError({"detail": "Banner image exceeds 8 MB limit."})
+
+    ext = "png" if "png" in content_type else ("webp" if "webp" in content_type else "jpg")
+    r2_key = f"promotions/driver_offers/{offer.id}/banner_{int(time.time())}.{ext}"
+
+    banner_url = ""
+    if is_r2_configured():
+        uploaded = upload_bytes_to_r2(file_bytes, r2_key, content_type)
+        if uploaded:
+            pub_url = get_public_url(r2_key)
+            banner_url = pub_url or generate_presigned_url(r2_key, expires_in=86400 * 30)
+
+    if not banner_url:
+        offer.banner_image = file_bytes
+        offer.banner_content_type = content_type
+        banner_url = f"/api/v1/driver-offers/{offer.id}/banner/"
+
+    offer.banner_url = banner_url
+    offer.save(update_fields=["banner_url", "banner_image", "banner_content_type", "updated_at"])
+    return banner_url
+
+
 class DriverOfferViewSet(viewsets.ModelViewSet):
     queryset = DriverOffer.objects.filter(is_deleted=False)
     serializer_class = DriverOfferSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
     filterset_fields = ("active",)
     search_fields = ("title", "description")
     ordering_fields = ("priority", "start_date", "end_date", "created_at")
+
+    def perform_create(self, serializer):
+        offer = serializer.save()
+        upload = self.request.FILES.get("file") or self.request.FILES.get("banner") or self.request.FILES.get("image")
+        if upload:
+            try:
+                process_and_save_banner(offer, upload)
+            except Exception as exc:
+                logger.warning("Banner upload during create failed: %s", exc)
+
+    def perform_update(self, serializer):
+        offer = serializer.save()
+        upload = self.request.FILES.get("file") or self.request.FILES.get("banner") or self.request.FILES.get("image")
+        if upload:
+            try:
+                process_and_save_banner(offer, upload)
+            except Exception as exc:
+                logger.warning("Banner upload during update failed: %s", exc)
 
     def get_permissions(self):
         if self.action in {"list", "retrieve", "current", "banner"}:
@@ -117,38 +167,12 @@ class DriverOfferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        content_type = getattr(upload, "content_type", "") or "image/jpeg"
-        content_type = content_type.split(";")[0].strip().lower()
-        if not content_type.startswith("image/"):
-            return Response(
-                {"detail": "File must be an image (JPEG, PNG, WebP)."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        file_bytes = upload.read()
-        if len(file_bytes) > 8 * 1024 * 1024:
-            return Response(
-                {"detail": "Banner image exceeds 8 MB limit."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ext = "png" if "png" in content_type else ("webp" if "webp" in content_type else "jpg")
-        r2_key = f"promotions/driver_offers/{offer.id}/banner_{int(time.time())}.{ext}"
-
-        banner_url = ""
-        if is_r2_configured():
-            uploaded = upload_bytes_to_r2(file_bytes, r2_key, content_type)
-            if uploaded:
-                pub_url = get_public_url(r2_key)
-                banner_url = pub_url or generate_presigned_url(r2_key, expires_in=86400 * 30)
-
-        if not banner_url:
-            offer.banner_image = file_bytes
-            offer.banner_content_type = content_type
-            banner_url = f"/api/v1/driver-offers/{offer.id}/banner/"
-
-        offer.banner_url = banner_url
-        offer.save(update_fields=["banner_url", "banner_image", "banner_content_type", "updated_at"])
+        try:
+            process_and_save_banner(offer, upload)
+        except drf_serializers.ValidationError as err:
+            return Response(err.detail, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return success_response(
             DriverOfferSerializer(offer, context={"request": request}).data,

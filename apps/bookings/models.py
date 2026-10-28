@@ -99,6 +99,7 @@ class BookingParcelPhoto(TimeStampedUUIDModel):
     class Kind(models.TextChoices):
         PICKUP = "pickup", "Pickup"
         DROP = "drop", "Drop"
+        TOLL_RECEIPT = "toll_receipt", "Toll Receipt"
 
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="parcel_photos")
     kind = models.CharField(max_length=16, choices=Kind.choices)

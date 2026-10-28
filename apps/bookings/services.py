@@ -284,7 +284,29 @@ def transition_booking_state(
 
     if to_state == Booking.BookingState.COMPLETED and booking.driver_id:
         try:
+            from decimal import Decimal
             from apps.wallets.services import record_trip_wallet_settlement
+
+            claimed_toll = payload.get("actual_toll_amount") or payload.get("claimed_toll")
+            breakdown = dict(booking.pricing_breakdown or {})
+            if claimed_toll is not None:
+                try:
+                    toll_val = Decimal(str(claimed_toll)).quantize(Decimal("0.01"))
+                    if toll_val < Decimal("0.00"):
+                        toll_val = Decimal("0.00")
+                    breakdown["actual_toll_amount"] = str(toll_val)
+                    breakdown["toll_charges"] = str(toll_val)
+                    breakdown["toll_submitted_by"] = "driver"
+                    booking.pricing_breakdown = breakdown
+                    fare_without_toll = Decimal(str(breakdown.get("fare_without_toll") or booking.estimated_fare))
+                    booking.final_fare = (fare_without_toll + toll_val).quantize(Decimal("0.01"))
+                    booking.save(update_fields=["pricing_breakdown", "final_fare", "updated_at"])
+                except Exception as toll_err:
+                    import logging
+                    logging.getLogger(__name__).warning("Could not parse claimed toll on booking %s: %s", booking.id, toll_err)
+            elif not booking.final_fare or booking.final_fare <= Decimal("0.00"):
+                booking.final_fare = booking.estimated_fare
+                booking.save(update_fields=["final_fare", "updated_at"])
 
             has_online_payment = booking.payments.filter(status="success").exists()
             pm = "online" if has_online_payment else (payload.get("payment_method") or "cash")
@@ -316,8 +338,8 @@ def save_booking_parcel_photo(*, booking: Booking, kind: str, image_bytes: bytes
     from apps.common.r2 import is_r2_configured, upload_bytes_to_r2, get_public_url
     from .models import BookingParcelPhoto
 
-    if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP}:
-        raise ValueError("Photo must be pickup or drop.")
+    if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP, BookingParcelPhoto.Kind.TOLL_RECEIPT}:
+        raise ValueError("Photo must be pickup, drop, or toll receipt.")
     if not image_bytes or len(image_bytes) < 32:
         raise ValueError("Parcel photo is empty.")
     if len(image_bytes) > MAX_PARCEL_PHOTO_BYTES:

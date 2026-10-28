@@ -173,13 +173,18 @@ class BookingSerializer(serializers.ModelSerializer):
             }
         has_pickup = _parcel_photo_flag(instance, "has_pickup_parcel_photo", BookingParcelPhoto.Kind.PICKUP)
         has_drop = _parcel_photo_flag(instance, "has_drop_parcel_photo", BookingParcelPhoto.Kind.DROP)
+        has_toll_receipt = _parcel_photo_flag(instance, "has_toll_receipt_photo", BookingParcelPhoto.Kind.TOLL_RECEIPT)
         data["has_pickup_parcel_photo"] = has_pickup
         data["has_drop_parcel_photo"] = has_drop
+        data["has_toll_receipt_photo"] = has_toll_receipt
         data["pickup_photo_url"] = (
             f"/api/v1/bookings/{instance.id}/parcel-photo/?kind=pickup" if has_pickup else None
         )
         data["drop_photo_url"] = (
             f"/api/v1/bookings/{instance.id}/parcel-photo/?kind=drop" if has_drop else None
+        )
+        data["toll_receipt_url"] = (
+            f"/api/v1/bookings/{instance.id}/parcel-photo/?kind=toll_receipt" if has_toll_receipt else None
         )
         return data
 

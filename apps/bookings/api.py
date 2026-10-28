@@ -234,9 +234,9 @@ class BookingViewSet(viewsets.ModelViewSet):
     def parcel_photo(self, request, pk=None):
         booking = self.get_object()
         kind = (request.data.get("kind") if request.method == "POST" else request.query_params.get("kind") or "").strip()
-        if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP}:
+        if kind not in {BookingParcelPhoto.Kind.PICKUP, BookingParcelPhoto.Kind.DROP, BookingParcelPhoto.Kind.TOLL_RECEIPT}:
             return success_response(
-                {"detail": "kind must be pickup or drop."},
+                {"detail": "kind must be pickup, drop, or toll_receipt."},
                 message="Invalid photo",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
